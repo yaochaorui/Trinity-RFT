@@ -320,6 +320,37 @@ class VerlPPOTrainerWrapper(RayPPOTrainer, TrainEngineWrapper):
             if self.algorithm.can_balance_batch and self.config.trainer.balance_batch:
                 self._balance_batch(batch, metrics=metrics)  # TODO this may affect multi-turn
 
+            # cr: hack!! only for OPMD
+            # cr: note that after this we will construct a new batch via progressive self-play resampling
+            if self.algorithm.progressive_resampling:
+                    # progressive self-replay resampling 
+                    with _timer("precompute_log_prob", timing_raw):
+
+                        self.logger.info(f"Precomputing log_prob at step {self.global_steps}.")
+
+                        precomputed_out = self.actor_rollout_wg.compute_log_prob(batch)
+                        
+                        token_log_probs = precomputed_out.batch['old_log_probs']
+                        response_mask = batch.batch['response_mask'] 
+                        # Apply mask and sum
+                        masked_log_probs = token_log_probs * response_mask
+                        response_log_probs = masked_log_probs.sum(dim=1)  # Shape: [batch_size]
+
+
+                    # === ANNEALING HACK: Progressive resampling weight annealing ===
+                    # Gradually reduce the influence of high-probability samples - FAST for 200 steps
+                    initial_resampling_sharpness = getattr(self.config.trainer, 'initial_resampling_sharpness', 0.0)
+                    final_resampling_sharpness = getattr(self.config.trainer, 'final_resampling_sharpness', 1.0)
+                    resampling_progress = min(1.0, self.global_steps / 120)  # Anneal over first 60% of training
+                    current_sharpness = initial_resampling_sharpness + resampling_progress * (final_resampling_sharpness - initial_resampling_sharpness)
+                    
+                    # cr: current version does not distinguish among different tasks
+                    w = response_log_probs.detach().exp()
+                    batch_size = w.shape[0]
+                    w /= w.sum()
+                    idx = torch.multinomial(w, num_samples=batch_size, replacement=True)
+                    batch = batch.select_idxs(idx)
+
             # compute global_valid tokens
             batch.meta_info["global_token_num"] = torch.sum(
                 batch.batch["attention_mask"], dim=-1
@@ -373,6 +404,7 @@ class VerlPPOTrainerWrapper(RayPPOTrainer, TrainEngineWrapper):
                 self.logger.info(f"Saved at step {self.global_steps}.")
 
         # collect metrics
+        # cr: here is where we collect all the metrics. but the intermediate content is computed above, which means we used the newly sampled batch
         if self.algorithm.use_advantage:  # TODO
             metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
         metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))

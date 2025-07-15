@@ -219,6 +219,8 @@ class AlgorithmConfig:
 
     sample_strategy: Optional[str] = None
     sample_strategy_args: Optional[dict] = None
+    # cr: TODO
+    progressive_resampling: bool = False  # whether to use progressive resampling
 
     advantage_fn: Optional[str] = None  # "ppo"
     # If not set, use AdvantageFn.default_args()
@@ -341,6 +343,9 @@ class TrainerConfig:
     trainer_type: str = "verl"
     save_interval: int = 0
     enable_preview: bool = True  # enable rollout preview in wandb
+
+    initial_resampling_sharpness: float = 0.0  # Start with uniform resampling
+    final_resampling_sharpness: float = 1.0  # End with more focused resampling
 
     # trainer configs
     actor_grad_clip: Optional[float] = None

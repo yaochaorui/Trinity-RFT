@@ -117,6 +117,8 @@ class OPMDAlgorithm(AlgorithmType):
     use_reference: bool = True
     use_advantage: bool = True
     can_balance_batch: bool = True
+    # cr: hack!!s
+    progressive_resampling: bool = True
     schema: type = ExperienceModel
 
     @classmethod
@@ -130,7 +132,6 @@ class OPMDAlgorithm(AlgorithmType):
             "kl_loss_fn": "k2",
             "entropy_loss_fn": "default",
         }
-
 
 @ALGORITHM_TYPE.register_module("dpo")
 class DPOAlgorithm(AlgorithmType):
