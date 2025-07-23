@@ -8,12 +8,12 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, List, Optional, Type, Union
 
 import openai
-import torch
 
 from trinity.common.config import FormatConfig, GenerationConfig
 from trinity.common.experience import Experience
 from trinity.common.models.model import ModelWrapper
-from trinity.common.rewards.reward_fn import MathRewardFn, RewardFn
+from trinity.common.rewards.math_reward import MathRewardFn
+from trinity.common.rewards.reward_fn import RewardFn
 from trinity.utils.log import get_logger
 from trinity.utils.registry import Registry
 
@@ -24,18 +24,21 @@ WORKFLOWS = Registry("workflows")
 
 
 @dataclass
-class Task:
+class Task(dict):
     """A Task class that defines a task and its associated reward function / workflow."""
 
     workflow: Type[Workflow]
     format_args: FormatConfig = field(default_factory=FormatConfig)
     rollout_args: GenerationConfig = field(default_factory=GenerationConfig)
     workflow_args: dict = field(default_factory=dict)
+    reward_fn_args: dict = field(default_factory=dict)
     is_eval: bool = False
     reward_fn: Optional[Type[RewardFn]] = None
     raw_task: Optional[dict] = None  # The raw data sample
 
-    group_id: Optional[str] = None  # for GRPO-like algorithms, automatically assigned
+    # automatically assigned ids
+    batch_id: int = 0
+    task_id: int = 0
 
     def to_workflow(
         self, model: Any, auxiliary_models: Optional[List[openai.OpenAI]] = None
@@ -82,10 +85,12 @@ class Workflow(ABC):
 
     def __init__(
         self,
-        model: ModelWrapper,
+        *,
         task: Task,
+        model: ModelWrapper,
         auxiliary_models: Optional[List[openai.OpenAI]] = None,
     ):
+        self.task = task
         self.model = model
         self.auxiliary_models = auxiliary_models
 
@@ -100,6 +105,7 @@ class Workflow(ABC):
     @abstractmethod
     def run(self) -> List[Experience]:
         """Run workflow and return a list of experiences."""
+        raise NotImplementedError
 
 
 class MultiTurnWorkflow(Workflow):
@@ -109,13 +115,14 @@ class MultiTurnWorkflow(Workflow):
 
     def __init__(
         self,
-        model: ModelWrapper,
+        *,
         task: Task,
+        model: ModelWrapper,
         auxiliary_models: Optional[List[openai.OpenAI]] = None,
     ):
         super().__init__(
-            model=model,
             task=task,
+            model=model,
             auxiliary_models=auxiliary_models,
         )
 
@@ -133,8 +140,6 @@ class MultiTurnWorkflow(Workflow):
         log_probs = log_probs * generation_mask
 
         assert tokens.shape == log_probs.shape
-        # set prompt length to the first 1 in the gen_mask
-        prompt_length = torch.where(generation_mask == 1)[0][0].item()
 
         metrics = {}
         for k, v in info.items():
@@ -143,7 +148,6 @@ class MultiTurnWorkflow(Workflow):
 
         experience = Experience(
             tokens=tokens,
-            prompt_length=prompt_length,
             action_mask=generation_mask,
             reward=reward,
             logprobs=log_probs,
@@ -159,14 +163,15 @@ class SimpleWorkflow(Workflow):
 
     def __init__(
         self,
-        model: ModelWrapper,
+        *,
         task: Task,
+        model: ModelWrapper,
         auxiliary_models: Optional[List[openai.OpenAI]] = None,
     ):
         self.reset(task)
         super().__init__(
-            model=model,
             task=task,
+            model=model,
             auxiliary_models=auxiliary_models,
         )
 
@@ -178,6 +183,7 @@ class SimpleWorkflow(Workflow):
         self.format_args = task.format_args
         self.system_prompt = task.format_args.system_prompt
         self.reply_prefix = task.format_args.reply_prefix
+        self.reward_fn_args = task.reward_fn_args
 
         self.raw_task = task.raw_task
         self.task_desc = task.task_desc
@@ -185,7 +191,7 @@ class SimpleWorkflow(Workflow):
 
         reward_fn = task.reward_fn
         if isinstance(reward_fn, type) and issubclass(reward_fn, RewardFn):
-            self.reward_fn: RewardFn = reward_fn()
+            self.reward_fn: RewardFn = reward_fn(**self.reward_fn_args)
         else:
             raise ValueError("`reward_fn` must be a subclass of `RewardFn`")
         # Rollout args
@@ -194,6 +200,7 @@ class SimpleWorkflow(Workflow):
         self.is_eval = task.is_eval
 
     def format_messages(self):
+        """Format messages for the instruct model."""
         messages = []
         if self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
@@ -209,20 +216,20 @@ class SimpleWorkflow(Workflow):
         logger.debug("start chat")
         responses = self.model.chat(messages, **self.rollout_args)
         for response in responses:
-            reward = self.reward_fn(  # type: ignore [misc]
+            reward_dict = self.reward_fn(  # type: ignore [misc]
                 response=response.response_text,  # type: ignore [arg-type]
                 truth=self.truth,
-                return_dict=self.is_eval,
             )
+
+            if response.metrics is None:
+                response.metrics = {}
+            response.metrics.update(reward_dict)
+            reward = sum(reward_dict.values())
+            response.reward = reward
+
             logger.debug(
                 f"self.task_desc: {self.task_desc}, messages: {messages}, response: {response.response_text}, reward: {reward}"
             )
-            if isinstance(reward, dict):
-                if response.metrics is None:
-                    response.metrics = {}
-                response.metrics.update(reward)
-                reward = sum(reward.values())
-            response.reward = reward
         return responses
 
 
@@ -232,14 +239,15 @@ class MathWorkflow(SimpleWorkflow):
 
     def __init__(
         self,
-        model: ModelWrapper,
+        *,
         task: Task,
+        model: ModelWrapper,
         auxiliary_models: Optional[List[openai.OpenAI]] = None,
     ):
         self.reset(task)
         super().__init__(
-            model=model,
             task=task,
+            model=model,
             auxiliary_models=auxiliary_models,
         )
 

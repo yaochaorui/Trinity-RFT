@@ -20,6 +20,11 @@ $$
 The first term corresponds to the standard GRPO objective, which aims to maximize the expected reward. The last term is an auxiliary objective defined on expert data, encouraging the policy to imitate expert behavior. $\mu$ is a weighting factor that controls the relative importance of the two terms.
 
 
+
+A visualization of this pipeline is as follows:
+
+![](../../assets/trinity-mix.png)
+
 ## Step 0: Prepare the Expert Data
 
 We prompt a powerful LLM to generate responses with the CoT process for some pre-defined questions. The collected dta are viewed as some experiences from an expert. We store them in a `jsonl` file `expert_data.jsonl` with the following format:
@@ -137,7 +142,8 @@ We also need to add an `is_expert_mask` field when transforming to DataProto to 
     cumsum = torch.cumsum(attention_mask, dim=-1)
     position_ids = torch.clip(cumsum - 1, 0, None).long()
     batch_dict = {
-        "uid": np.array(experiences.group_ids),
+        "uid": np.array([eid.tid for eid in experiences.eids]),
+        "unique_ids": np.array([eid.uid for eid in experiences.eids]),
         "position_ids": position_ids,
         "input_ids": experiences.tokens.long(),
         "responses": experiences.tokens[:, experiences.prompt_length :].long(),

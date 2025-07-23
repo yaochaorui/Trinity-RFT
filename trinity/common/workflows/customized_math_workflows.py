@@ -5,7 +5,7 @@ from dataclasses import asdict
 from typing import List
 
 from trinity.common.experience import Experience
-from trinity.common.rewards.reward_fn import MathBoxedRewardFn
+from trinity.common.rewards.math_reward import MathBoxedRewardFn
 from trinity.common.workflows.workflow import WORKFLOWS, SimpleWorkflow, Task
 from trinity.utils.log import get_logger
 
@@ -31,6 +31,7 @@ class MathBoxedWorkflow(SimpleWorkflow):
         self.is_eval = task.is_eval
 
         self.workflow_args = task.workflow_args
+        self.reward_fn_args = task.reward_fn_args
 
         self.use_base = self.workflow_args.get("use_base", False)
         self.with_think = self.workflow_args.get("with_think", False)
@@ -48,7 +49,10 @@ class MathBoxedWorkflow(SimpleWorkflow):
             else:
                 self.system_prompt = default_prompt
 
-        self.reward_fn = MathBoxedRewardFn()
+        if task.reward_fn is None:
+            self.reward_fn = MathBoxedRewardFn(**self.reward_fn_args)
+        else:
+            self.reward_fn = task.reward_fn(**self.reward_fn_args)
 
     def format_prompt(self):
         prompt_text = ""
@@ -60,7 +64,6 @@ class MathBoxedWorkflow(SimpleWorkflow):
         return prompt_text
 
     def run(self) -> List[Experience]:
-        # TODO: Optimize the generate function
         if not self.use_base:
             messages = self.format_messages()
         else:
@@ -73,20 +76,26 @@ class MathBoxedWorkflow(SimpleWorkflow):
             responses = self.model.generate([prompt_text], **self.rollout_args)
 
         for response in responses:
-            reward = MathBoxedRewardFn()(  # type: ignore [misc]
+            reward_dict = self.reward_fn(  # type: ignore [misc]
                 response=response.response_text,  # type: ignore [arg-type]
                 truth=self.truth,
-                return_dict=self.is_eval,
                 with_think=self.with_think,
                 format_score_coef=self.format_score_coef,
+                response_token=response.tokens[response.prompt_length :],
             )
-            logger.debug(
-                f"self.task_desc: {self.task_desc}, messages: {messages}, response: {response.response_text}, reward: {reward}"
-            )
-            if isinstance(reward, dict):
-                if response.metrics is None:
-                    response.metrics = {}
-                response.metrics.update(reward)
-                reward = sum(reward.values())
+
+            if response.metrics is None:
+                response.metrics = {}
+            response.metrics.update(reward_dict)
+            reward = sum(reward_dict.values())
             response.reward = reward
+
+            if not self.use_base:
+                logger.debug(
+                    f"self.task_desc: {self.task_desc}, messages: {messages}, response: {response.response_text}, reward: {reward}"
+                )
+            else:
+                logger.debug(
+                    f"self.task_desc: {self.task_desc}, prompt_text: {prompt_text}, response: {response.response_text}, reward: {reward}"
+                )
         return responses
