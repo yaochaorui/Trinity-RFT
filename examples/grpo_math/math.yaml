@@ -20,8 +20,8 @@ buffer:
       storage_type: file
       path: /PATH/TO/DATASET/
       format:
-        prompt_key: 'question'
-        response_key: 'gt_answer'
+        prompt_key: 'problem'
+        response_key: 'solution'
       rollout_args:
         temperature: 1.0
         logprobs: 0
