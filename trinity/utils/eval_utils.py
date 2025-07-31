@@ -106,8 +106,10 @@ def compute_score(solution_str, ground_truth) -> float:
     retval = 0.0
     try:
         string_in_last_boxed = last_boxed_only_string(solution_str)
+        ground_truth = last_boxed_only_string(ground_truth)
         if string_in_last_boxed is not None:
             answer = remove_boxed(string_in_last_boxed)
+            ground_truth = remove_boxed(ground_truth)
             if is_equiv(answer, ground_truth):
                 retval = 1.0
     except Exception as e:
