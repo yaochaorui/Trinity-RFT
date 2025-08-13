@@ -20,6 +20,7 @@ from trinity.algorithm.advantage_fn.reinforce_plus_plus_advantage import (
 )
 from trinity.algorithm.advantage_fn.remax_advantage import REMAXAdvantageFn
 from trinity.algorithm.advantage_fn.rloo_advantage import RLOOAdvantageFn
+from trinity.algorithm.advantage_fn.asymre_advantage import ASYMREAdvantageFn
 
 __all__ = [
     "ADVANTAGE_FN",
@@ -34,4 +35,5 @@ __all__ = [
     "RLOOAdvantageFn",
     "OPMDAdvantageFn",
     "OPMDGroupAdvantage",
+    "ASYMREAdvantageFn"
 ]
