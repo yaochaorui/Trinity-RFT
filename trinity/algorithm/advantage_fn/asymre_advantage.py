@@ -1,23 +1,29 @@
 """AsymRE advantage computation"""
 
 from collections import defaultdict
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 import torch
 from verl import DataProto
 
-from trinity.algorithm.advantage_fn import ADVANTAGE_FN, AdvantageFn
+from trinity.algorithm.advantage_fn.advantage_fn import (
+    ADVANTAGE_FN,
+    AdvantageFn,
+    GroupAdvantage,
+)
+from trinity.common.experience import Experience, group_by
+from trinity.utils.annotations import Deprecated
 
-
-@ADVANTAGE_FN.register_module("asymre")
+@Deprecated
+@ADVANTAGE_FN.register_module("asymre_verl")
 class ASYMREAdvantageFn(AdvantageFn):
     """AsymRE advantage computation"""
 
     def __init__(
         self,
-        asymre_baseline_shift: float = -0.1,
+        baseline_shift: float = -0.1,
     ) -> None:
-        self.asymre_baseline_shift = asymre_baseline_shift
+        self.baseline_shift = baseline_shift
 
     def __call__(
         self,
@@ -40,7 +46,7 @@ class ASYMREAdvantageFn(AdvantageFn):
         eos_mask = exps.batch["response_mask"]
 
         index = exps.non_tensor_batch["uid"]
-        asymre_baseline_shift = self.asymre_baseline_shift
+        baseline_shift = self.baseline_shift
 
         response_length = token_level_rewards.shape[-1]
         scores = token_level_rewards.sum(dim=-1)
@@ -58,7 +64,7 @@ class ASYMREAdvantageFn(AdvantageFn):
                     # TODO: consider id2baseline[idx] = id2score[idx] (so that this sample won't take effect?)
                 elif len(id2score[idx]) > 1:
                     id2baseline[idx] = (
-                        torch.mean(torch.tensor(id2score[idx])) + asymre_baseline_shift
+                        torch.mean(torch.tensor(id2score[idx])) + baseline_shift
                     )
                 else:
                     raise ValueError(f"no score in prompt index: {idx}")
@@ -78,5 +84,40 @@ class ASYMREAdvantageFn(AdvantageFn):
     @classmethod
     def default_args(cls) -> Dict:
         return {
-            "asymre_baseline_shift": -0.1,
+            "baseline_shift": -0.1,
         }
+
+
+
+@ADVANTAGE_FN.register_module("asymre")
+class ASYMREGroupAdvantage(GroupAdvantage):
+    """asymre Group Advantage computation"""
+
+    def __init__(self, baseline_shift: float = -0.1, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.baseline_shift = baseline_shift
+
+    def group_experiences(self, exps):
+        return group_by(exps, id_type="task")
+
+    def calculate_group_advantage(
+        self, group_id: str, exps: List[Experience]
+    ) -> Tuple[List[Experience], Dict]:
+        with torch.no_grad():
+            if len(exps) == 1:
+                group_baseline = torch.tensor(0.0)
+            else:
+                group_rewards = torch.tensor([exp.reward for exp in exps], dtype=torch.float32)
+                group_baseline = torch.mean(group_rewards)+ self.baseline_shift
+            for exp in exps:
+                score = exp.reward - group_baseline
+                exp.advantages = score * exp.action_mask
+                exp.returns = exp.advantages.clone()
+            metrics = {
+                "group_baseline": group_baseline.item(),
+            }
+        return exps, metrics
+
+    @classmethod
+    def default_args(cls) -> dict:
+        return {"baseline_shift": -0.1}
