@@ -10,7 +10,7 @@ from trinity.algorithm.policy_loss_fn.opmd_policy_loss import OPMDPolicyLossFn
 from trinity.algorithm.policy_loss_fn.policy_loss_fn import POLICY_LOSS_FN, PolicyLossFn
 from trinity.algorithm.policy_loss_fn.ppo_policy_loss import PPOPolicyLossFn
 from trinity.algorithm.policy_loss_fn.sft_loss import SFTLossFn
-
+from trinity.algorithm.policy_loss_fn.reclip_policy_loss import ReCLIPPolicyLossFn
 __all__ = [
     "POLICY_LOSS_FN",
     "PolicyLossFn",
@@ -23,4 +23,4 @@ __all__ = [
     "MIXCHORDPolicyLossFn",
     "SFTISLossFn",
     "SFTPhiLossFn",
-]
+    "ReCLIPPolicyLossFn",]
