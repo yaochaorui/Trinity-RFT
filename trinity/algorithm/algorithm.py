@@ -131,6 +131,7 @@ class OPMDAlgorithm(AlgorithmType):
             "entropy_loss_fn": "default",
         }
 
+
 @ALGORITHM_TYPE.register_module("reclip")
 class ReCLIPAlgorithm(AlgorithmType):
     """ReCLIP Algorithm."""
@@ -152,7 +153,7 @@ class ReCLIPAlgorithm(AlgorithmType):
             "kl_loss_fn": "none",
             "entropy_loss_fn": "none",
         }
-    
+
 
 @ALGORITHM_TYPE.register_module("asymre")
 class AsymREAlgorithm(AlgorithmType):
