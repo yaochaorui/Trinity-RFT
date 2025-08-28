@@ -38,8 +38,7 @@ class sPPOPolicyLossFn(PolicyLossFn):
         ratio = torch.exp(logprob - old_logprob).detach()
         is_in_range = (ratio >= (1 / (1 + self.epsilon))) * (ratio <= (1 + self.epsilon))
         is_clipped_mask = ~is_in_range
-        negative_approx_kl = logprob - old_logprob
-        pg_losses = -advantages * negative_approx_kl * is_in_range.float()
+        pg_losses = -advantages * (logprob - old_logprob) * is_in_range.float()
         pg_loss = masked_mean(pg_losses, action_mask)
         pg_clipfrac = masked_mean(is_clipped_mask.float(), action_mask)
         metrics = {
