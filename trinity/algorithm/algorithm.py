@@ -130,7 +130,8 @@ class OPMDAlgorithm(AlgorithmType):
             "kl_loss_fn": "k2",
             "entropy_loss_fn": "default",
         }
-    
+
+
 @ALGORITHM_TYPE.register_module("asymre")
 class AsymREAlgorithm(AlgorithmType):
     """AsymRE algorithm."""
@@ -152,6 +153,7 @@ class AsymREAlgorithm(AlgorithmType):
             "kl_loss_fn": "none",
             "entropy_loss_fn": "none",
         }
+
 
 @ALGORITHM_TYPE.register_module("dpo")
 class DPOAlgorithm(AlgorithmType):

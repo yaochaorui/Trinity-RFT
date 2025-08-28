@@ -6,12 +6,14 @@ name: asymre_math
 checkpoint_root_dir:  /PATH/TO/CHECKPOINT/
 model:
   model_path: /PATH/TO/MODEL/ # the path to your model
+  max_response_tokens: 1024
+  max_model_len: 1280
 algorithm:
   algorithm_type: asymre
   policy_loss_fn_args:
     tau: 0
-  add_strategy_args:
-    baseline_shift: -0.1  # Baseline shift for the AsymREAddStrategy
+  advantage_fn_args:
+    baseline_shift: -0.1  # Baseline shift for the AsymRE
   repeat_times: 8
 cluster:
   node_num: 1

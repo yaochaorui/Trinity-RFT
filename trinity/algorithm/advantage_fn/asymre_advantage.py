@@ -14,6 +14,7 @@ from trinity.algorithm.advantage_fn.advantage_fn import (
 from trinity.common.experience import Experience, group_by
 from trinity.utils.annotations import Deprecated
 
+
 @Deprecated
 @ADVANTAGE_FN.register_module("asymre_verl")
 class ASYMREAdvantageFn(AdvantageFn):
@@ -63,9 +64,7 @@ class ASYMREAdvantageFn(AdvantageFn):
                     id2baseline[idx] = torch.tensor(0.0)
                     # TODO: consider id2baseline[idx] = id2score[idx] (so that this sample won't take effect?)
                 elif len(id2score[idx]) > 1:
-                    id2baseline[idx] = (
-                        torch.mean(torch.tensor(id2score[idx])) + baseline_shift
-                    )
+                    id2baseline[idx] = torch.mean(torch.tensor(id2score[idx])) + baseline_shift
                 else:
                     raise ValueError(f"no score in prompt index: {idx}")
             for i in range(bsz):
@@ -88,7 +87,6 @@ class ASYMREAdvantageFn(AdvantageFn):
         }
 
 
-
 @ADVANTAGE_FN.register_module("asymre")
 class ASYMREGroupAdvantage(GroupAdvantage):
     """asymre Group Advantage computation"""
@@ -108,7 +106,7 @@ class ASYMREGroupAdvantage(GroupAdvantage):
                 group_baseline = torch.tensor(0.0)
             else:
                 group_rewards = torch.tensor([exp.reward for exp in exps], dtype=torch.float32)
-                group_baseline = torch.mean(group_rewards)+ self.baseline_shift
+                group_baseline = torch.mean(group_rewards) + self.baseline_shift
             for exp in exps:
                 score = exp.reward - group_baseline
                 exp.advantages = score * exp.action_mask
