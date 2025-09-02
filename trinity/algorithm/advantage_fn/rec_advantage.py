@@ -112,6 +112,7 @@ class RECGroupedAdvantage(GroupAdvantage):
 
         """
         self.epsilon = epsilon
+        self.std_normalize = std_normalize
 
     def group_experiences(self, exps):
         return group_by(exps, id_type="task")
