@@ -9,7 +9,7 @@ from trinity.algorithm.policy_loss_fn.policy_loss_fn import POLICY_LOSS_FN, Poli
 from trinity.algorithm.utils import masked_mean
 
 
-@POLICY_LOSS_FN.register_module("sppo")
+@POLICY_LOSS_FN.register_module("rec")
 class RECPolicyLossFn(PolicyLossFn):
     def __init__(
         self,
