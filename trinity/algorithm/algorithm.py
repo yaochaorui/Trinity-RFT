@@ -299,7 +299,7 @@ class RECAlgorithm(AlgorithmType):
     """REC Algorithm."""
 
     use_critic: bool = False
-    use_reference: bool = False
+    use_reference: bool = True
     compute_advantage_in_trainer: bool = False
     can_balance_batch: bool = True
     schema: str = "experience"
