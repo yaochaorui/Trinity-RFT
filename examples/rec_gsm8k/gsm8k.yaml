@@ -15,7 +15,7 @@ algorithm:
     clip_mode: "none"
     weight: "none"
   advantage_fn_args:
-    std_normalize: false  
+    std_normalize: false
   repeat_times: 8
 cluster:
   node_num: 1

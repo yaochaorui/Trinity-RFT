@@ -1,7 +1,6 @@
 """REC advantage computation
 """
 
-import copy
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
@@ -15,7 +14,6 @@ from trinity.algorithm.advantage_fn.advantage_fn import (
 )
 from trinity.common.experience import Experience, group_by
 from trinity.utils.annotations import Deprecated
-from trinity.utils.monitor import gather_metrics
 
 
 @Deprecated
