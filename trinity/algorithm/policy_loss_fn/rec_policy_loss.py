@@ -16,6 +16,8 @@ class RECPolicyLossFn(PolicyLossFn):
         backend: str = "verl",
         epsilon_low: float = 0.2,
         epsilon_high: float = 0.2,
+        epsilon_low_prime: float = 0.4,
+        epsilon_high_prime: float = 0.4,
         clip_mode: str = "none",
         weight: str = "none",
     ) -> None:
@@ -25,11 +27,20 @@ class RECPolicyLossFn(PolicyLossFn):
         self.epsilon_high = epsilon_high
         assert 0.0 < self.epsilon_low <= 1.0, f"Invalid epsilon_low: {self.epsilon_low}"
         assert 0.0 < self.epsilon_high <= 1.0, f"Invalid epsilon_high: {self.epsilon_high}"
+        self.epsilon_low_prime = epsilon_low_prime
+        self.epsilon_high_prime = epsilon_high_prime
+        assert 0.0 < self.epsilon_low_prime <= 1.0, f"Invalid epsilon_low_prime: {self.epsilon_low_prime}"
+        assert 0.0 < self.epsilon_high_prime <= 1.0, f"Invalid epsilon_high_prime: {self.epsilon_high_prime}"
         self.clip_mode = clip_mode
         assert self.clip_mode in [
             "none",
             "one-side",
             "two-side",
+            "one-side-positive",
+            "one-side-negative",
+            "ring",
+            "two-side-negative",
+            "two-side-negative-2",
         ], f"Invalid clip_mode: {self.clip_mode}"
         self.weight = weight
         assert self.weight in ["none", "importance_sampling"], f"Invalid weight: {self.weight}"
@@ -52,6 +63,24 @@ class RECPolicyLossFn(PolicyLossFn):
             is_in_range = (ratio <= (1 + self.epsilon_high)) * (advantages > 0) + (
                 advantages < 0
             ) * (ratio >= (1 - self.epsilon_low))
+        elif self.clip_mode == "one-side-positive":
+            is_in_range = (ratio <= (1 + self.epsilon_high)) * (advantages > 0) + (
+                advantages <= 0
+            ) * torch.ones_like(ratio).bool()
+        elif self.clip_mode == "one-side-negative":
+            is_in_range = (ratio >= (1 - self.epsilon_low)) * (advantages < 0) + (
+                advantages >= 0
+            ) * torch.ones_like(ratio).bool()   
+        elif self.clip_mode == "two-side-negative":
+            is_in_range = (ratio >= (1 - self.epsilon_low)) * (ratio <= (1 + self.epsilon_high)) + (advantages < 0) * (ratio >= (1 - self.epsilon_low_prime)) 
+        elif self.clip_mode == "two-side-negative-2":
+            is_in_range = (ratio >= (1 - self.epsilon_low)) * (ratio <= (1 + self.epsilon_high)) + (advantages < 0) * (ratio >= (1 - self.epsilon_low_prime)) + (
+                advantages >= 0
+            ) * torch.ones_like(ratio).bool()
+        elif self.clip_mode == "ring":
+            is_in_range = (ratio >= (1 - self.epsilon_low)) * (ratio <= (1 + self.epsilon_high)) + (ratio <= (1 + self.epsilon_high_prime)) * (advantages > 0) + (
+                advantages < 0
+            ) * (ratio >= (1 - self.epsilon_low_prime))
         else:  # none
             is_in_range = torch.ones_like(ratio).bool()
         is_clipped_mask = ~is_in_range
@@ -73,6 +102,8 @@ class RECPolicyLossFn(PolicyLossFn):
         return {
             "epsilon_low": 0.2,
             "epsilon_high": 0.2,
+            "epsilon_low_prime":  0.4,
+            "epsilon_high_prime": 0.4,
             "clip_mode": "none",
             "weight": "none",
         }
