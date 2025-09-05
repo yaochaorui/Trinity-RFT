@@ -5,13 +5,35 @@ cd "$(dirname "$0")/../.."
 echo "Current directory: $(pwd)"
 
 ### config the parameters below ###
-sync_interval=1 
-sync_offset=0
+
 project_name='sync_offset_'$sync_offset'_sync_'$sync_interval
 total_steps=2000
 save_interval=100
 eval_interval=2001
 random_seed=42
+
+config_id=${1:-1}   # default 1
+
+# default
+case $config_id in
+  1)
+    sync_interval=1 
+    sync_offset=0
+    ;;
+  2)
+    sync_interval=250 
+    sync_offset=0
+    ;;
+  3)
+    sync_interval=2000
+    sync_offset=1999
+    ;;
+  *)
+    echo "Unknown config_id=$config_id"
+    exit 1
+    ;;
+esac
+
 
 # config this according to your hardware. Default is for 8 L20 GPUs.
 runner_num_train=64
@@ -30,9 +52,11 @@ engine_num_bench=8
 
 CONFIG_FILE="$(pwd)/examples/rec_math/math.yaml"
 model_path='your model path here'
-train_data_path='your data path here'
+
+# modelscope download --dataset AI-ModelScope/MATH-lighteval --local_dir $DATASET_PATH/{dataset_name}
+train_data_path='$DATASET_PATH/{dataset_name}/data'
 # here we only evaluate one dataset, you can add more eval datasets in the yaml file if needed.
-eval_data_path='your data path here'
+eval_data_path='$DATASET_PATH/{dataset_name}/data'
 
 exp_name='llama-math-G1' 
 
