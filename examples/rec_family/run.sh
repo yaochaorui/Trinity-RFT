@@ -8,9 +8,9 @@ echo "Current directory: $(pwd)"
 sync_interval=1 
 sync_offset=0
 project_name='sync_offset_'$sync_offset'_sync_'$sync_interval
-total_steps=200
-save_interval=20
-eval_interval=500
+total_steps=2000
+save_interval=100
+eval_interval=2001
 random_seed=42
 
 # config this according to your hardware. Default is for 8 L20 GPUs.
