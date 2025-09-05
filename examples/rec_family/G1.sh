@@ -139,6 +139,7 @@ run_experiment() {
 
 # vanilla REINFORCE
 run_experiment "REINFORCE" "none" "none" false
+rm -rf $prefix/REINFORCE/global_step*
 
 # GRPO 
 run_experiment "GRPO" "one-side" "importance_sampling" true
