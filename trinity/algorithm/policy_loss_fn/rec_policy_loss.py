@@ -78,7 +78,12 @@ class RECPolicyLossFn(PolicyLossFn):
             is_in_range = (ratio <= (1 + self.epsilon_high)) * (advantages >= 0) + (
                 advantages <= 0
             ) * (ratio >= (1 - self.epsilon_low))
-        
+        elif self.clip_mode == "ring":
+            is_in_range = (
+                (ratio >= (1 - self.epsilon_low) * ratio <= (1 + self.epsilon_high))
+                + (advantages >= 0) * (ratio <= 1 - self.epsilon_low_prime)
+                + (advantages <= 0) * (ratio >= 1 + self.epsilon_high_prime)
+            )
         else:  # none
             is_in_range = torch.ones_like(ratio).bool()
         is_clipped_mask = ~is_in_range
