@@ -28,7 +28,7 @@ class RECPolicyLossFn(PolicyLossFn):
         self.epsilon_low = epsilon_low
         self.epsilon_high = epsilon_high
         assert 0.0 < self.epsilon_low <= 1.0, f"Invalid epsilon_low: {self.epsilon_low}"
-        assert 0.0 < self.epsilon_high <= 1.0, f"Invalid epsilon_high: {self.epsilon_high}"
+        assert 0.0 < self.epsilon_high, f"Invalid epsilon_high: {self.epsilon_high}"
         self.epsilon_low_prime = epsilon_low_prime
         self.epsilon_high_prime = epsilon_high_prime
         assert (
