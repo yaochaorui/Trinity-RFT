@@ -35,29 +35,26 @@ class RECPolicyLossFn(PolicyLossFn):
             0.0 < self.epsilon_low_prime <= 1.0
         ), f"Invalid epsilon_low_prime: {self.epsilon_low_prime}"
         assert (
-            0.0 < self.epsilon_high_prime <= 1.0
+            0.0 < self.epsilon_high_prime
         ), f"Invalid epsilon_high_prime: {self.epsilon_high_prime}"
         self.clip_mode = clip_mode
         assert self.clip_mode in [
             "none",
             "one-side",
             "two-side",
-            "one-side-positive",
-            "one-side-negative",
             "ring",
-            "two-side-negative",
-            "two-side-negative-2",
         ], f"Invalid clip_mode: {self.clip_mode}"
         self.weight = weight
         assert self.weight in ["none", "importance_sampling"], f"Invalid weight: {self.weight}"
 
-        self.regularizer = "none"
+        self.regularizer = regularizer
         assert self.regularizer in [
             "none",
             "k2",
             "forward-kl",
         ], f"Invalid regularizer: {self.regularizer}"
-        self.regularizer_coef = 0.0
+        self.regularizer_coef = regularizer_coef
+        assert self.regularizer_coef >= 0.0, f"Invalid regularizer_coef: {self.regularizer_coef}"
 
     def __call__(  # type: ignore
         self,
@@ -78,7 +75,12 @@ class RECPolicyLossFn(PolicyLossFn):
             is_in_range = (ratio <= (1 + self.epsilon_high)) * (advantages >= 0) + (
                 advantages <= 0
             ) * (ratio >= (1 - self.epsilon_low))
-        
+        elif self.clip_mode == "ring":
+            is_in_range = (
+                (ratio >= (1 - self.epsilon_low)) * (ratio <= (1 + self.epsilon_high))
+                + (advantages >= 0) * (ratio <= 1 - self.epsilon_low_prime)
+                + (advantages <= 0) * (ratio >= 1 + self.epsilon_high_prime)
+            )
         else:  # none
             is_in_range = torch.ones_like(ratio).bool()
         is_clipped_mask = ~is_in_range
@@ -90,11 +92,11 @@ class RECPolicyLossFn(PolicyLossFn):
 
         if self.regularizer == "forward-kl":
             regularizer_losses = self.regularizer_coef * logprob
-            pg_losses -= regularizer_losses
-        if self.regularizer == "k2":
+            pg_losses = pg_losses - regularizer_losses
+        elif self.regularizer == "k2":
             # note that here we absorb the 1/2 in Kimi into \tau
             regularizer_losses = self.regularizer_coef * (logprob - old_logprob).square()
-            pg_losses += regularizer_losses
+            pg_losses = pg_losses + regularizer_losses
 
         pg_loss = masked_mean(pg_losses, action_mask)
 
@@ -110,8 +112,8 @@ class RECPolicyLossFn(PolicyLossFn):
         return {
             "epsilon_low": 0.2,
             "epsilon_high": 0.2,
-            "epsilon_low_prime": 0.4,
-            "epsilon_high_prime": 0.4,
+            "epsilon_low_prime": 0.6,
+            "epsilon_high_prime": 2,
             "clip_mode": "none",
             "weight": "none",
             "regularizer": "none",

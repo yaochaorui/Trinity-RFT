@@ -43,15 +43,15 @@ echo "-----------------------------------"
 update_config() {
     local config_file=$1
     local config_name=$(basename $(dirname $config_file))
-    
+
     echo "Updating $config_file..."
-    
+
     # Check if file exists
     if [ ! -f "$config_file" ]; then
         echo "  Warning: $config_file not found, skipping..."
         return
     fi
-    
+
     # Update common parameters
     yq -i -y '.project = "'$project_name'"' "$config_file"
     yq -i -y '.synchronizer.sync_offset = '$sync_offset'' "$config_file"
@@ -60,7 +60,7 @@ update_config() {
     yq -i -y '.explorer.eval_interval = '$eval_interval'' "$config_file"
     yq -i -y '.trainer.save_interval = '$save_interval'' "$config_file"
     yq -i -y '.explorer.rollout_model.seed = '$random_seed'' "$config_file"
-    
+
     echo "  ✓ Updated $config_file"
 }
 
@@ -90,6 +90,7 @@ run_experiment() {
   local clip_mode="$2"
   local weight="$3"
   local std_normalize="$4"
+  local regularizer="$5"
   local log_file="${prefix}${name}/log.txt"
   mkdir -p "${prefix}${name}/"
 
@@ -106,6 +107,7 @@ run_experiment() {
     .algorithm.policy_loss_fn_args.clip_mode = \"$clip_mode\" |
     .algorithm.policy_loss_fn_args.weight = \"$weight\" |
     .algorithm.advantage_fn_args.std_normalize = $std_normalize |
+    .algorithm.policy_loss_fn_args.regularizer = \"$regularizer\" |
     .mode = \"$mode\" |
     .synchronizer.sync_method = \"$sync_method\" |
     .explorer.runner_num = $runner_num |
@@ -137,32 +139,30 @@ run_experiment() {
 
 # --- Execute Experiments ---
 
-# vanilla REINFORCE
-run_experiment "REINFORCE" "none" "none" false
-rm -rf $prefix/REINFORCE/global_step*
+# # vanilla REINFORCE
+# run_experiment "REINFORCE" "none" "none" false "none"
+# rm -rf $prefix/REINFORCE/global_step*
 
-# GRPO 
-run_experiment "GRPO" "one-side" "importance_sampling" true
-rm -rf $prefix/GRPO/global_step*
+# # GRPO
+# run_experiment "GRPO" "one-side" "importance_sampling" true "none"
+# rm -rf $prefix/GRPO/global_step*
 
-# REC-OneSide-IS
-run_experiment "REC-OneSide-IS" "one-side" "importance_sampling" false
-rm -rf $prefix/REC-OneSide-IS/global_step*
+# # REC-OneSide-IS
+# run_experiment "REC-OneSide-IS" "one-side" "importance_sampling" false "none"
+# rm -rf $prefix/REC-OneSide-IS/global_step*
 
-# REC-OneSide-NoIS
-run_experiment "REC-OneSide-NoIS" "one-side" "none" false
-rm -rf $prefix/REC-OneSide-NoIS/global_step*
+# # REC-OneSide-NoIS
+# run_experiment "REC-OneSide-NoIS" "one-side" "none" false "none"
+# rm -rf $prefix/REC-OneSide-NoIS/global_step*
 
-# REC-TwoSide-IS
-run_experiment "REC-TwoSide-IS" "two-side" "importance_sampling" false
-rm -rf $prefix/REC-TwoSide-IS/global_step*
+# # REC-TwoSide-IS
+# run_experiment "REC-TwoSide-IS" "two-side" "importance_sampling" false "none"
+# rm -rf $prefix/REC-TwoSide-IS/global_step*
 
-# REC-TwoSide-NoIS
-run_experiment "REC-TwoSide-NoIS" "two-side" "none" false
-rm -rf $prefix/REC-TwoSide-NoIS/global_step*
+# # REC-TwoSide-NoIS
+# run_experiment "REC-TwoSide-NoIS" "two-side" "none" false "none"
+# rm -rf $prefix/REC-TwoSide-NoIS/global_step*
 
-# # REC-Ring-NoIS
-# run_experiment "REC-Ring-NoIS" "ring" "none" false
-# rm -rf $prefix/REC-Ring-NoIS/global_step*
-
-
+# REC-Ring-NoIS
+run_experiment "REC-Ring-NoIS" "ring" "none" false "none"
+rm -rf $prefix/REC-Ring-NoIS/global_step*

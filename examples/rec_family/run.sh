@@ -17,11 +17,11 @@ config_id=${1:-1}   # default 1
 # default
 case $config_id in
   1)
-    sync_interval=1 
+    sync_interval=1
     sync_offset=0
     ;;
   2)
-    sync_interval=250 
+    sync_interval=250
     sync_offset=0
     ;;
   3)
@@ -58,7 +58,7 @@ train_data_path='$DATASET_PATH/{dataset_name}/data'
 # here we only evaluate one dataset, you can add more eval datasets in the yaml file if needed.
 eval_data_path='$DATASET_PATH/{dataset_name}/data'
 
-exp_name='llama-math-G1' 
+exp_name='llama-math-G1'
 
 ##################################
 
@@ -72,4 +72,3 @@ yq -i -y '.checkpoint_root_dir = "'$checkpoint_root_dir'"' $CONFIG_FILE
 yq -i -y '.buffer.explorer_input.taskset.path = "'$train_data_path'"' $CONFIG_FILE
 yq -i -y '.buffer.explorer_input.eval_tasksets[0].path = "'$eval_data_path'"' $CONFIG_FILE
 zsh examples/rec_family/G1.sh $sync_interval $sync_offset $project_name $total_steps $save_interval $eval_interval $mode $random_seed $prefix $CONFIG_FILE $runner_num_train $engine_num_train $runner_num_bench $engine_num_bench
-
