@@ -14,8 +14,13 @@ algorithm:
     epsilon_high: 0.2
     clip_mode: "none"
     weight: "none"
+    temp: 1.0
+    regularizer: "none"
+    regularizer_coef: 0.0
   advantage_fn_args:
     std_normalize: false
+    weight: "none"
+    temp: 1.0
   repeat_times: 8
 cluster:
   node_num: 1

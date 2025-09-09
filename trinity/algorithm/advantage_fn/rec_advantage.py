@@ -101,6 +101,8 @@ class RECGroupedAdvantage(GroupAdvantage):
         self,
         epsilon: float = 1e-6,
         std_normalize: Optional[bool] = False,
+        weight: Optional[str] = "none",
+        temp: float = 1.0,
     ) -> None:
         """Initialize the REC advantage function.
 
@@ -111,6 +113,13 @@ class RECGroupedAdvantage(GroupAdvantage):
         """
         self.epsilon = epsilon
         self.std_normalize = std_normalize
+        self.weight = weight
+        assert self.weight in [
+            "none",
+            "advantage_group_wise_normalized",
+        ], f"Invalid weight: {self.weight}"
+        self.temp = temp
+        assert self.temp > 0.0, f"Invalid temp: {self.temp}"
 
     def group_experiences(self, exps):
         return group_by(exps, id_type="task")
@@ -136,6 +145,16 @@ class RECGroupedAdvantage(GroupAdvantage):
                 exp.advantages = score * exp.action_mask
                 exp.returns = exp.advantages.clone()
 
+            if self.weight == "advantage_group_wise_normalized":
+                weights = torch.tensor([exp.advantages.sum() for exp in exps], dtype=torch.float32)
+                # Normalize within each group
+                weights = torch.softmax(weights / self.temp, dim=0)
+                for i, exp in enumerate(exps):
+                    exp.advantages = exp.advantages * weights[i]
+                metrics["advantage_weight_mean"] = weights.mean().item()
+                metrics["advantage_weight_std"] = weights.std().item()
+                metrics["advantage_weight_temp"] = self.temp  # Add temperature to metrics
+
             metrics["reward_mean"] = group_reward_mean.item()
             metrics["reward_std"] = group_reward_std.item()
 
@@ -143,4 +162,4 @@ class RECGroupedAdvantage(GroupAdvantage):
 
     @classmethod
     def default_args(cls) -> dict:
-        return {"epsilon": 1e-6}
+        return {"epsilon": 1e-6, "std_normalize": False, "weight": "none", "temp": 1.0}
