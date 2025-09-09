@@ -22,6 +22,7 @@ class RECPolicyLossFn(PolicyLossFn):
         weight: str = "none",
         regularizer: str = "none",
         regularizer_coef: float = 0.0,
+        temp: float = 1.0,
     ) -> None:
         super().__init__(backend=backend)
 
@@ -45,7 +46,12 @@ class RECPolicyLossFn(PolicyLossFn):
             "ring",
         ], f"Invalid clip_mode: {self.clip_mode}"
         self.weight = weight
-        assert self.weight in ["none", "importance_sampling"], f"Invalid weight: {self.weight}"
+        assert self.weight in [
+            "none",
+            "importance_sampling",
+            "advantage_unnormalized",
+            "confidence",
+        ], f"Invalid weight: {self.weight}"
 
         self.regularizer = regularizer
         assert self.regularizer in [
@@ -55,6 +61,8 @@ class RECPolicyLossFn(PolicyLossFn):
         ], f"Invalid regularizer: {self.regularizer}"
         self.regularizer_coef = regularizer_coef
         assert self.regularizer_coef >= 0.0, f"Invalid regularizer_coef: {self.regularizer_coef}"
+        self.temp = temp
+        assert self.temp > 0.0, f"Invalid temp: {self.temp}"
 
     def __call__(  # type: ignore
         self,
@@ -87,6 +95,13 @@ class RECPolicyLossFn(PolicyLossFn):
 
         if self.weight == "importance_sampling":
             advantages = advantages * ratio  # importance sampling
+        elif self.weight == "confidence":
+            advantages = (
+                advantages * torch.exp(self.temp * logprob).detach()
+            )  # confidence weighting
+        elif self.weight == "advantage_unnormalized":
+            weight = torch.exp(advantages / self.temp)
+            advantages = advantages * weight  # advantage weighting  (unnormalized version)
 
         pg_losses = -advantages * logprob * is_in_range.float()
 
