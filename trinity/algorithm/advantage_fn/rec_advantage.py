@@ -102,6 +102,7 @@ class RECGroupedAdvantage(GroupAdvantage):
         epsilon: float = 1e-6,
         std_normalize: Optional[bool] = False,
         weight: Optional[str] = "none",
+        drop: Optional[str] = "none",
         temp: float = 1.0,
     ) -> None:
         """Initialize the REC advantage function.
@@ -120,6 +121,8 @@ class RECGroupedAdvantage(GroupAdvantage):
         ], f"Invalid weight: {self.weight}"
         self.temp = temp
         assert self.temp > 0.0, f"Invalid temp: {self.temp}"
+        self.drop = drop
+        assert self.drop in ["none", "balance"], f"Invalid drop: {self.drop}"
 
     def group_experiences(self, exps):
         return group_by(exps, id_type="task")
@@ -127,6 +130,9 @@ class RECGroupedAdvantage(GroupAdvantage):
     def calculate_group_advantage(
         self, group_id: str, exps: List[Experience]
     ) -> Tuple[List[Experience], Dict]:
+        # Initialize masks and metrics
+        pos_neg_mask = torch.zeros(len(exps), dtype=torch.float32)
+
         metrics = {}
         with torch.no_grad():
             if len(exps) == 1:
@@ -137,11 +143,12 @@ class RECGroupedAdvantage(GroupAdvantage):
                 group_reward_mean = torch.mean(rewards)
                 group_reward_std = torch.std(rewards)
 
-            for exp in exps:
+            for i, exp in enumerate(exps):
                 if self.std_normalize:
                     score = (exp.reward - group_reward_mean) / (group_reward_std + self.epsilon)
                 else:
                     score = exp.reward - group_reward_mean
+                pos_neg_mask[i] = 1.0 if score >= 0 else 0
                 exp.advantages = score * exp.action_mask
                 exp.returns = exp.advantages.clone()
 
@@ -155,6 +162,16 @@ class RECGroupedAdvantage(GroupAdvantage):
                 metrics["advantage_weight_std"] = weights.std().item()
                 metrics["advantage_weight_temp"] = self.temp  # Add temperature to metrics
 
+            if self.drop == "balance":
+                pos_count = pos_neg_mask.sum().item()
+                neg_count = len(exps) - pos_count
+                drop_prob = 0
+                if neg_count > pos_count:
+                    drop_prob = 1 - (pos_count / neg_count)
+                    for i in range(len(exps)):
+                        if pos_neg_mask[i] == 0.0 and torch.rand(1).item() < drop_prob:
+                            exps[i].advantages = torch.zeros_like(exps[i].advantages)
+                metrics["drop_balance"] = drop_prob
             metrics["reward_mean"] = group_reward_mean.item()
             metrics["reward_std"] = group_reward_std.item()
 
@@ -162,4 +179,10 @@ class RECGroupedAdvantage(GroupAdvantage):
 
     @classmethod
     def default_args(cls) -> dict:
-        return {"epsilon": 1e-6, "std_normalize": False, "weight": "none", "temp": 1.0}
+        return {
+            "epsilon": 1e-6,
+            "std_normalize": False,
+            "weight": "none",
+            "drop": "none",
+            "temp": 1.0,
+        }
