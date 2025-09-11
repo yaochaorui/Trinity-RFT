@@ -11,7 +11,6 @@ if [ $# -ne 13 ]; then
 fi
 
 # List of config directories to update
-CONFIG_FILE="rec_math/math.yaml"
 config_dirs=(
     "rec_math"
 )
@@ -151,17 +150,17 @@ yq -i -y \
     '.algorithm.policy_loss_fn_args.regularizer = "none" |
       .algorithm.kl_loss_fn = "k2" |
       .algorithm.kl_loss_fn_args.kl_coef = 0.0' \
-    "${CONFIG_FILE:?CONFIG_FILE is not set}"
+    "${config_file:?config_file is not set}"
 
 yq -i -y \
     '.algorithm.policy_loss_fn_args.epsilon_low = 0.2 |
     .algorithm.policy_loss_fn_args.epsilon_high = 0.2 '  \
-    "${CONFIG_FILE:?CONFIG_FILE is not set}"
+    "${config_file:?config_file is not set}"
 
 yq -i -y \
     '.algorithm.policy_loss_fn_args.epsilon_low_prime = 0.6 |
     .algorithm.policy_loss_fn_args.epsilon_high_prime = 2.0 '  \
-    "${CONFIG_FILE:?CONFIG_FILE is not set}"
+    "${config_file:?config_file is not set}"
 
 # vanilla REINFORCE
 run_experiment "REINFORCE" "none" "none" false "none"
@@ -200,7 +199,7 @@ echo "-----------------------------------"
 yq -i -y \
     '.algorithm.policy_loss_fn_args.epsilon_low = 0.6 |
     .algorithm.policy_loss_fn_args.epsilon_high = 2.0 '  \
-    "${CONFIG_FILE:?CONFIG_FILE is not set}"
+    "${config_file:?config_file is not set}"
 
 # REC-OneSide-IS-ring
 run_experiment "REC-OneSide-IS-ring" "one-side" "importance_sampling" false "none"
