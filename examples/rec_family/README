@@ -1,0 +1,25 @@
+# yq (https://github.com/mikefarah/yq/) version v4.44.2
+
+# Experiment setup: REINFORCE for off-Policy Reinforcement Learning: Balancing positive and negative rewards
+# https://arxiv.org/abs/2506.20520.
+
+
+# Hyperparams for Llama-3.1-8B-Instruct
+# Optimizer: AdamW optimizer 
+# lr: $6\times 10^{-8}$
+# repeat_times: 8
+# batch_size=16, 128 trajectories are included in each gradient step.
+# total_steps=2000
+# batch_size=16
+# lr=6e-8
+
+# Inference parameters were set to temperature 1.0 (respectively 0.1) and top-p 1.0 (respectively 0.95) for the training (respectively for the evaluation).
+
+# The maximum trajectories length is set to 2048 tokens 
+
+# sync_interval=250
+
+# !! double check the math config!
+
+
+bash examples/rec_family/run.sh

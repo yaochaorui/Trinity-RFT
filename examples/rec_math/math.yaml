@@ -3,8 +3,8 @@ name: rec_math
 checkpoint_root_dir: /PATH/TO/SAVE/CHECKPOINTS/
 model:
   model_path: /PATH/TO/MODEL/
-  max_response_tokens: 1024
-  max_model_len: 1280
+  max_response_tokens: 2048
+  max_model_len: 2048
 algorithm:
   algorithm_type: rec
   policy_loss_fn_args:

@@ -1,6 +1,7 @@
 # yq version 3.4.3
 
-cd "$(dirname "$0")/../.."
+
+cd "$(dirname "$0")/.."
 
 # Check if correct number of arguments provided
 if [ $# -ne 13 ]; then
@@ -9,7 +10,11 @@ if [ $# -ne 13 ]; then
     exit 1
 fi
 
-
+# List of config directories to update
+CONFIG_FILE="rec_math/math.yaml"
+config_dirs=(
+    "rec_math"
+)
 
 sync_interval=$1
 sync_offset=$2
@@ -40,6 +45,7 @@ echo "-----------------------------------"
 
 
 # Function to update a single config file
+# Function to update a single config file
 update_config() {
     local config_file=$1
     local config_name=$(basename $(dirname $config_file))
@@ -68,6 +74,7 @@ update_config() {
 update_config "$config_file"
 
 
+
 # run the experiments with the updated configs
 echo "-----------------------------------"
 echo "Running experiments with updated configs..."
@@ -82,8 +89,9 @@ echo "-----------------------------------"
 
 
 # Create a function to run a single experiment
-# Arguments: $1: Name, $2: Clip Mode, $3: Weight
+# Arguments: $1: Name, $2: Clip Mode, $3: Weight $4: std_normalize, $5: regularizer
 
+# Remark: the script is for a single node training. Modify the runner_num, engine_num below and the cluster settings in the yaml file for multi-node training.
 
 run_experiment() {
   local name="$1"
@@ -139,30 +147,68 @@ run_experiment() {
 
 # --- Execute Experiments ---
 
-# # vanilla REINFORCE
-# run_experiment "REINFORCE" "none" "none" false "none"
-# rm -rf $prefix/REINFORCE/global_step*
+yq -i -y \
+    '.algorithm.policy_loss_fn_args.regularizer = "none" |
+      .algorithm.kl_loss_fn = "k2" |
+      .algorithm.kl_loss_fn_args.kl_coef = 0.0' \
+    "${CONFIG_FILE:?CONFIG_FILE is not set}"
 
-# # GRPO
-# run_experiment "GRPO" "one-side" "importance_sampling" true "none"
-# rm -rf $prefix/GRPO/global_step*
+yq -i -y \
+    '.algorithm.policy_loss_fn_args.epsilon_low = 0.2 |
+    .algorithm.policy_loss_fn_args.epsilon_high = 0.2 '  \
+    "${CONFIG_FILE:?CONFIG_FILE is not set}"
 
-# # REC-OneSide-IS
-# run_experiment "REC-OneSide-IS" "one-side" "importance_sampling" false "none"
-# rm -rf $prefix/REC-OneSide-IS/global_step*
+yq -i -y \
+    '.algorithm.policy_loss_fn_args.epsilon_low_prime = 0.6 |
+    .algorithm.policy_loss_fn_args.epsilon_high_prime = 2.0 '  \
+    "${CONFIG_FILE:?CONFIG_FILE is not set}"
 
-# # REC-OneSide-NoIS
-# run_experiment "REC-OneSide-NoIS" "one-side" "none" false "none"
-# rm -rf $prefix/REC-OneSide-NoIS/global_step*
+# vanilla REINFORCE
+run_experiment "REINFORCE" "none" "none" false "none"
+rm -rf $prefix/REINFORCE/global_step*
 
-# # REC-TwoSide-IS
-# run_experiment "REC-TwoSide-IS" "two-side" "importance_sampling" false "none"
-# rm -rf $prefix/REC-TwoSide-IS/global_step*
+# GRPO 
+run_experiment "GRPO" "one-side" "importance_sampling" true "none"
+rm -rf $prefix/GRPO/global_step*
 
-# # REC-TwoSide-NoIS
-# run_experiment "REC-TwoSide-NoIS" "two-side" "none" false "none"
-# rm -rf $prefix/REC-TwoSide-NoIS/global_step*
+# REC-OneSide-IS
+run_experiment "REC-OneSide-IS" "one-side" "importance_sampling" false "none"
+rm -rf $prefix/REC-OneSide-IS/global_step*
+
+# REC-OneSide-NoIS
+run_experiment "REC-OneSide-NoIS" "one-side" "none" false "none"
+rm -rf $prefix/REC-OneSide-NoIS/global_step*
+
+# REC-TwoSide-IS
+run_experiment "REC-TwoSide-IS" "two-side" "importance_sampling" false "none"
+rm -rf $prefix/REC-TwoSide-IS/global_step*
+
+# REC-TwoSide-NoIS
+run_experiment "REC-TwoSide-NoIS" "two-side" "none" false "none"
+rm -rf $prefix/REC-TwoSide-NoIS/global_step*
 
 # REC-Ring-NoIS
 run_experiment "REC-Ring-NoIS" "ring" "none" false "none"
 rm -rf $prefix/REC-Ring-NoIS/global_step*
+
+# REC-Ring-IS
+run_experiment "REC-Ring-IS" "ring" "importance_sampling" false "none"
+rm -rf $prefix/REC-Ring-IS/global_step*
+
+echo "-----------------------------------"
+
+yq -i -y \
+    '.algorithm.policy_loss_fn_args.epsilon_low = 0.6 |
+    .algorithm.policy_loss_fn_args.epsilon_high = 2.0 '  \
+    "${CONFIG_FILE:?CONFIG_FILE is not set}"
+
+# REC-OneSide-IS-ring
+run_experiment "REC-OneSide-IS-ring" "one-side" "importance_sampling" false "none"
+rm -rf $prefix/REC-OneSide-IS-ring/global_step*
+
+# REC-OneSide-NoIS-ring
+run_experiment "REC-OneSide-NoIS-ring" "one-side" "none" false "none"
+rm -rf $prefix/REC-OneSide-NoIS-ring/global_step*
+
+
+echo "All experiments completed."
