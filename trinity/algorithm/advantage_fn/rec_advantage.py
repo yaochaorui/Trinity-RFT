@@ -122,7 +122,6 @@ class RECGroupedAdvantage(GroupAdvantage):
         self, group_id: str, exps: List[Experience]
     ) -> Tuple[List[Experience], Dict]:
         # Initialize masks and metrics
-        pos_neg_mask = torch.zeros(len(exps), dtype=torch.float32)
         N = len(exps)
         metrics = {}
         with torch.no_grad():
@@ -134,7 +133,7 @@ class RECGroupedAdvantage(GroupAdvantage):
                 group_reward_mean = torch.mean(rewards)
                 group_reward_std = torch.std(rewards)
 
-            is_pos = (rewards>=group_reward_mean)
+            is_pos = rewards >= group_reward_mean
             pos_count = is_pos.sum().item()
             neg_count = len(exps) - pos_count
 

@@ -3,6 +3,7 @@
 project: "Trinity-RFT-GSM8K"
 name: rec_gsm8k
 checkpoint_root_dir:  /PATH/TO/CHECKPOINT/
+mode: both
 model:
   model_path: /PATH/TO/MODEL/
   max_response_tokens: 1024
@@ -19,8 +20,6 @@ algorithm:
     regularizer_coef: 0.0
   advantage_fn_args:
     std_normalize: false
-    weight: "none"
-    temp: 1.0
   repeat_times: 8
 cluster:
   node_num: 1
@@ -70,5 +69,18 @@ synchronizer:
   sync_offset: 0
 trainer:
   trainer_type: verl
-  trainer_config_path: examples/rec_gsm8k/train_gsm8k.yaml
   save_interval: 100
+  trainer_config:
+    actor_rollout_ref:
+      model:
+        use_remove_padding: true
+      actor:
+        use_dynamic_bsz: true
+        ppo_max_token_len_per_gpu: 16384
+        ulysses_sequence_parallel_size: 1
+        optim:
+          lr: 1e-6
+      ref:
+        log_prob_use_dynamic_bsz: ${trainer.trainer_config.actor_rollout_ref.actor.use_dynamic_bsz}
+        log_prob_max_token_len_per_gpu: ${trainer.trainer_config.actor_rollout_ref.actor.ppo_max_token_len_per_gpu}
+        ulysses_sequence_parallel_size: ${trainer.trainer_config.actor_rollout_ref.actor.ulysses_sequence_parallel_size} # sp size
