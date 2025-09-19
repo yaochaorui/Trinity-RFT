@@ -1,36 +1,23 @@
-import os
 import unittest
 
 import torch
+from openai import BadRequestError
 from parameterized import parameterized_class
 from transformers import AutoTokenizer
 
-from tests.tools import RayUnittestBase, RayUnittestBaseAysnc, get_template_config
+from tests.tools import (
+    RayUnittestBase,
+    RayUnittestBaseAysnc,
+    get_api_model_path,
+    get_model_path,
+    get_template_config,
+)
 from trinity.common.models import create_inference_models
 from trinity.common.models.model import ModelWrapper
 from trinity.common.models.utils import (
     tokenize_and_mask_messages_default,
     tokenize_and_mask_messages_hf,
 )
-
-
-def get_model_path() -> str:
-    path = os.environ.get("MODEL_PATH")
-    if not path:
-        raise EnvironmentError(
-            "Please set `export MODEL_PATH=<your_model_checkpoint_dir>` before running this test."
-        )
-    return path
-
-
-def get_api_model_path() -> str:
-    path = os.environ.get("API_MODEL_PATH")
-    if not path:
-        raise EnvironmentError(
-            "Please set `export API_MODEL_PATH=<your_api_model_checkpoint_dir>` before running this test."
-        )
-    return path
-
 
 DEBUG = False
 
@@ -40,6 +27,7 @@ def print_debug(*args):
         print(*args)
 
 
+# Qwen2.5 chat template with {% generation %} mark
 CHAT_TEMPLATE = r"""
 {%- if tools %}
     {{- '<|im_start|>system\n' }}
@@ -67,19 +55,19 @@ CHAT_TEMPLATE = r"""
     {%- elif (message.role == "assistant" and not message.tool_calls) %}
         {{- '<|im_start|>' + message.role + '\n'}}{% generation %}{{- message.content + '<|im_end|>' + '\n' }}{% endgeneration %}
     {%- elif message.role == "assistant" %}
-        {{- '<|im_start|>' + message.role }}{% generation %}
+        {{- '<|im_start|>' + message.role + '\n'}}{% generation %}
         {%- if message.content %}
-            {{- '\n' + message.content }}
+            {{- message.content }}
         {%- endif %}
         {%- for tool_call in message.tool_calls %}
             {%- if tool_call.function is defined %}
                 {%- set tool_call = tool_call.function %}
             {%- endif %}
-            {{- '\n<tool_call>\n{"name": "' }}
+            {{- '<tool_call>\n{"name": "' }}
             {{- tool_call.name }}
             {{- '", "arguments": ' }}
             {{- tool_call.arguments | tojson }}
-            {{- '}\n</tool_call>' }}
+            {{- '}\n</tool_call>\n' }}
         {%- endfor %}
         {{- '<|im_end|>\n' }}{% endgeneration %}
     {%- elif message.role == "tool" %}
@@ -104,20 +92,15 @@ CHAT_TEMPLATE = r"""
     (
         "tensor_parallel_size",
         "engine_num",
-        "use_v1",
         "repeat_times",
         "enable_history",
         "use_async",
         "max_model_len",
     ),
     [
-        (1, 2, False, 2, True, False, None),
-        (1, 2, False, 2, True, True, 20),
-        (1, 2, False, 2, True, False, 20),
-        (2, 2, False, 1, False, True, None),
-        (2, 2, True, 2, True, False, None),
-        (1, 2, True, 1, False, True, None),
-        (2, 1, True, 3, True, True, None),
+        (2, 2, 2, True, False, None),
+        (1, 2, 1, False, True, None),
+        (2, 1, 3, True, True, None),
     ],
 )
 class ModelWrapperTest(RayUnittestBaseAysnc):
@@ -129,7 +112,6 @@ class ModelWrapperTest(RayUnittestBaseAysnc):
         self.config.model.max_model_len = self.max_model_len
         self.config.explorer.rollout_model.engine_num = self.engine_num
         self.config.explorer.rollout_model.tensor_parallel_size = self.tensor_parallel_size
-        self.config.explorer.rollout_model.use_v1 = self.use_v1
         self.config.explorer.rollout_model.chat_template = CHAT_TEMPLATE
         self.config.algorithm.repeat_times = self.repeat_times
         self.config.explorer.rollout_model.enable_history = self.enable_history
@@ -139,7 +121,7 @@ class ModelWrapperTest(RayUnittestBaseAysnc):
         pprint(self.config)
         self.engines, self.auxiliary_engines = create_inference_models(self.config)
         self.model_wrapper = ModelWrapper(
-            self.engines[0], model_type="vllm_async", enable_history=self.enable_history
+            self.engines[0], engine_type="vllm", enable_history=self.enable_history
         )
 
     async def test_generate(
@@ -235,12 +217,67 @@ class ModelWrapperTest(RayUnittestBaseAysnc):
             self.assertTrue(len(history_experiences) == 0)
 
 
+@parameterized_class(
+    (
+        "max_model_len",
+        "max_prompt_tokens",
+        "max_response_tokens",
+    ),
+    [
+        (20, 19, None),
+        (20, None, 1),
+    ],
+)
+class TestModelLen(RayUnittestBase):
+    def setUp(self):
+        self.config = get_template_config()
+        self.config.mode = "explore"
+        self.config.model.model_path = get_model_path()
+        self.config.model.max_model_len = self.max_model_len
+        self.config.model.max_prompt_tokens = self.max_prompt_tokens
+        self.config.model.max_response_tokens = self.max_response_tokens
+        self.config.explorer.rollout_model.enable_openai_api = True
+        self.config.check_and_update()
+
+        self.engines, self.auxiliary_engines = create_inference_models(self.config)
+        self.model_wrapper = ModelWrapper(self.engines[0], engine_type="vllm", enable_history=True)
+
+    def test_model_len(self):
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "What's the weather like today?"},
+        ]
+        response = self.model_wrapper.chat(messages)
+        self.assertEqual(len(response), 1)
+        self.assertEqual(len(response[0].tokens), self.max_model_len)
+        exps = self.model_wrapper.extract_experience_from_history()
+        self.assertEqual(len(exps), 1)
+        self.assertEqual(len(exps[0].tokens), self.max_model_len)
+
+        # max_prompt_tokens and max_response_tokens do not work with openai api
+        openai_client = self.model_wrapper.get_openai_client()
+        model_id = openai_client.models.list().data[0].id
+        with self.assertRaises(BadRequestError):
+            # the prompt is longer than max_model_len
+            openai_client.chat.completions.create(model=model_id, messages=messages, n=1)
+        exps = self.model_wrapper.extract_experience_from_history()
+        self.assertEqual(len(exps), 0)
+
+        response = openai_client.chat.completions.create(model=model_id, messages=messages[1:], n=1)
+        self.assertEqual(len(response.choices), 1)
+        print(response.choices[0].message.content)
+        exps = self.model_wrapper.extract_experience_from_history()
+        self.assertEqual(len(exps), 1)
+        # only generate max_model_len - prompt_len tokens
+        self.assertEqual(len(exps[0].tokens), self.max_model_len)
+
+
 class TestAPIServer(RayUnittestBase):
     def setUp(self):
         self.config = get_template_config()
         self.config.mode = "explore"
         self.config.model.model_path = get_model_path()
-        self.config.explorer.rollout_model.engine_type = "vllm_async"
+        self.config.explorer.rollout_model.engine_type = "vllm"
         self.config.explorer.rollout_model.engine_num = 1
         self.config.explorer.rollout_model.tensor_parallel_size = 1
         self.config.explorer.rollout_model.use_v1 = True
@@ -249,11 +286,9 @@ class TestAPIServer(RayUnittestBase):
 
         self.config.check_and_update()
         self.engines, self.auxiliary_engines = create_inference_models(self.config)
-        self.model_wrapper = ModelWrapper(
-            self.engines[0], model_type="vllm_async", enable_history=True
-        )
+        self.model_wrapper = ModelWrapper(self.engines[0], engine_type="vllm", enable_history=True)
         self.model_wrapper_no_history = ModelWrapper(
-            self.engines[0], model_type="vllm_async", enable_history=False
+            self.engines[0], engine_type="vllm", enable_history=False
         )
 
     def test_api(self):
@@ -306,8 +341,81 @@ class TestAPIServer(RayUnittestBase):
         self.assertEqual(len(self.model_wrapper_no_history.history), 0)
 
 
+class TestAsyncAPIServer(RayUnittestBaseAysnc):
+    def setUp(self):
+        self.config = get_template_config()
+        self.config.mode = "explore"
+        self.config.model.model_path = get_model_path()
+        self.config.explorer.rollout_model.engine_type = "vllm"
+        self.config.explorer.rollout_model.engine_num = 1
+        self.config.explorer.rollout_model.tensor_parallel_size = 1
+        self.config.explorer.rollout_model.use_v1 = True
+        self.config.explorer.rollout_model.chat_template = CHAT_TEMPLATE
+        self.config.explorer.rollout_model.enable_openai_api = True
+
+        self.config.check_and_update()
+        self.engines, self.auxiliary_engines = create_inference_models(self.config)
+        self.model_wrapper = ModelWrapper(self.engines[0], engine_type="vllm", enable_history=True)
+        self.model_wrapper_no_history = ModelWrapper(
+            self.engines[0], engine_type="vllm", enable_history=False
+        )
+
+    async def test_api_async(self):
+        openai_client = self.model_wrapper.get_openai_async_client()
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "What is your name?"},
+        ]
+        model_id = (await openai_client.models.list()).data[0].id
+        response = await openai_client.chat.completions.create(
+            model=model_id, messages=messages, n=1
+        )
+        self.assertEqual(1, len(response.choices))
+        self.assertTrue(len(response.choices[0].message.content) > 0)
+        response = await openai_client.chat.completions.create(
+            model=model_id,
+            messages=messages,
+            n=2,
+            temperature=0.5,
+            logprobs=True,
+            top_logprobs=0,
+        )
+        self.assertEqual(2, len(response.choices))
+        self.assertTrue(response.choices[0].logprobs is not None)
+        self.assertEqual(0, len(response.choices[0].logprobs.content[0].top_logprobs))
+        self.assertTrue(response.choices[0].logprobs.content[0].logprob < 0)
+        self.assertTrue(hasattr(response, "prompt_token_ids"))
+        self.assertTrue(len(response.prompt_token_ids) > 0)
+        self.assertTrue(hasattr(response.choices[0], "token_ids"))
+        self.assertTrue(len(response.choices[0].token_ids) > 0)
+        exps = self.model_wrapper.extract_experience_from_history()
+        self.assertEqual(len(exps), 3)
+        response = await openai_client.chat.completions.create(
+            model=model_id,
+            messages=messages,
+            n=4,
+            temperature=0.5,
+            logprobs=True,
+            top_logprobs=0,
+        )
+        exps = self.model_wrapper.extract_experience_from_history()
+        self.assertEqual(len(exps), 4)
+        self.assertEqual(len(self.model_wrapper.extract_experience_from_history()), 0)
+        response = (
+            await self.model_wrapper_no_history.get_openai_async_client().chat.completions.create(
+                model=model_id, messages=messages, n=2
+            )
+        )
+        self.assertEqual(2, len(response.choices))
+        self.assertTrue(hasattr(response.choices[0], "token_ids"))
+        self.assertTrue(len(response.choices[0].token_ids) > 0)
+        with self.assertRaises(ValueError):
+            self.model_wrapper_no_history.extract_experience_from_history()
+        self.assertEqual(len(self.model_wrapper_no_history.history), 0)
+
+
 class TestTokenizer(unittest.TestCase):
-    def test_assistant_token_mask(self):
+    def test_action_mask(self):
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "What's the weather like today?"},
@@ -338,6 +446,80 @@ class TestTokenizer(unittest.TestCase):
         self.assertTrue(torch.equal(action_mask, action_mask_hf))
         self.assertEqual(prompt_length, prompt_length_hf)
 
+    def test_action_mask_with_tools(self):
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant with access to various tools. Use them when needed to help users.",
+            },
+            {"role": "user", "content": "What's the weather like in Beijing today?"},
+            {
+                "role": "assistant",
+                "content": "Let me get the weather for you.",
+                "tool_calls": [
+                    {
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "Beijing", "unit": "celsius"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "content": '{"temperature": 22, "condition": "sunny", "humidity": 45}',
+                "tool_call_id": "call_abc123",
+            },
+            {
+                "role": "assistant",
+                "content": "The weather in Beijing today is sunny with a temperature of 22°C and humidity at 45%. It's a pleasant day!",
+            },
+        ]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
+                            },
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                                "description": "The temperature unit",
+                            },
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+        tokenizer = AutoTokenizer.from_pretrained(get_model_path())
+        token_ids, action_mask, prompt_length = tokenize_and_mask_messages_default(
+            tokenizer=tokenizer,
+            messages=messages,
+            tools=tools,
+            chat_template=CHAT_TEMPLATE,
+        )
+        token_ids_hf, action_mask_hf, prompt_length_hf = tokenize_and_mask_messages_hf(
+            tokenizer=tokenizer,
+            messages=messages,
+            tools=tools,
+            chat_template=CHAT_TEMPLATE,
+        )
+        self.assertEqual(token_ids.shape, token_ids_hf.shape)
+        self.assertEqual(action_mask.shape, action_mask_hf.shape)
+        self.assertTrue(torch.equal(token_ids, token_ids_hf))
+        self.assertTrue(torch.equal(action_mask, action_mask_hf))
+        self.assertEqual(prompt_length, prompt_length_hf)
+
 
 @parameterized_class(
     ("enable_thinking", "reasoning_parser"),
@@ -351,7 +533,7 @@ class TestAPIServerToolCall(RayUnittestBase):
         self.config = get_template_config()
         self.config.mode = "explore"
         self.config.model.model_path = get_api_model_path()
-        self.config.explorer.rollout_model.engine_type = "vllm_async"
+        self.config.explorer.rollout_model.engine_type = "vllm"
         self.config.explorer.rollout_model.engine_num = 1
         self.config.explorer.rollout_model.tensor_parallel_size = 1
         self.config.explorer.rollout_model.use_v1 = True
@@ -365,11 +547,9 @@ class TestAPIServerToolCall(RayUnittestBase):
 
         self.config.check_and_update()
         self.engines, self.auxiliary_engines = create_inference_models(self.config)
-        self.model_wrapper = ModelWrapper(
-            self.engines[0], model_type="vllm_async", enable_history=True
-        )
+        self.model_wrapper = ModelWrapper(self.engines[0], engine_type="vllm", enable_history=True)
         self.model_wrapper_no_history = ModelWrapper(
-            self.engines[0], model_type="vllm_async", enable_history=False
+            self.engines[0], engine_type="vllm", enable_history=False
         )
 
     def test_api_tool_calls(self):

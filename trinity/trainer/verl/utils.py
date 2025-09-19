@@ -1,14 +1,18 @@
 """Utils for ccompatibility issues with verl."""
 
+import os
+
 import numpy as np
 import torch
 from verl import DataProto
 from verl.trainer.ppo.metric_utils import _compute_response_info
+from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path
 
+from trinity.common.config import Config
 from trinity.common.experience import Experiences
 
 
-def to_data_proto(experiences: Experiences) -> DataProto:
+def to_data_proto(experiences: Experiences) -> DataProto:  # noqa: C901
     """Convert Experiences to verl DataProto."""
     attention_mask = experiences.attention_masks
     cumsum = torch.cumsum(attention_mask, dim=-1)
@@ -26,6 +30,7 @@ def to_data_proto(experiences: Experiences) -> DataProto:
             else attention_mask[:, experiences.prompt_length :].long()
         ),
     }
+
     if experiences.rewards is not None:
         token_level_rewards = torch.zeros(attention_mask.shape, dtype=experiences.rewards.dtype)
         eos_mask_idx = cumsum.argmax(dim=-1)
@@ -43,6 +48,17 @@ def to_data_proto(experiences: Experiences) -> DataProto:
         batch_dict["advantages"] = experiences.advantages
     if experiences.returns is not None:
         batch_dict["returns"] = experiences.returns
+
+    if experiences.multi_modal_inputs is not None:
+        batch_size = len(batch_dict["unique_ids"])
+        batch_dict["multi_modal_inputs"] = np.array(
+            [
+                {k: v[i] for k, v in experiences.multi_modal_inputs.items()}
+                for i in range(batch_size)
+            ],
+            dtype=object,
+        )
+
     if experiences.custom_fields:
         for field in experiences.custom_fields:
             if hasattr(experiences, field):
@@ -150,3 +166,14 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = False) -> dict:
         )
 
     return metrics
+
+
+def get_latest_hf_checkpoint_path(config: Config):
+    """Get the latest huggingface checkpoint path"""
+    if config.trainer.trainer_type != "verl":
+        raise ValueError("This function is only for verl trainer.")
+    checkpoint_dir = find_latest_ckpt_path(config.checkpoint_job_dir)
+    hf_checkpoint_dir = os.path.join(checkpoint_dir, "actor", "huggingface")
+    if not os.path.exists(hf_checkpoint_dir):
+        raise ValueError(f"No huggingface checkpoint found in {hf_checkpoint_dir}")
+    return hf_checkpoint_dir

@@ -13,7 +13,6 @@ import ray
 import torch
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
-from trinity.algorithm.algorithm_manager import AlgorithmManager
 from trinity.buffer.buffer import get_buffer_reader
 from trinity.buffer.pipelines.experience_pipeline import ExperiencePipeline
 from trinity.common.config import Config
@@ -25,7 +24,7 @@ from trinity.common.constants import (
 )
 from trinity.common.models import create_inference_models
 from trinity.explorer.scheduler import Scheduler
-from trinity.manager.manager import CacheManager
+from trinity.manager.state_manager import StateManager
 from trinity.manager.synchronizer import Synchronizer
 from trinity.utils.log import get_logger
 from trinity.utils.monitor import MONITOR, gather_metrics
@@ -38,20 +37,21 @@ class Explorer:
     def __init__(self, config: Config):
         self.logger = get_logger(config.explorer.name, in_ray_actor=True)
         load_plugins()
-        self.cache = CacheManager(config)
-        explorer_meta = self.cache.load_explorer()
-        self.explore_step_num = explorer_meta.get("latest_iteration", 0)
+        self.state = StateManager(
+            path=config.checkpoint_job_dir, explorer_name=config.explorer.name, config=config
+        )
+        explorer_state = self.state.load_explorer()
+        self.explore_step_num = explorer_state.get("latest_iteration", 0)
         self.last_sync_step = self.explore_step_num if self.explore_step_num > 0 else -1
         self.synchronizer = Synchronizer.get_actor(config)
         self.config = config
-        self.algorithm_manager = AlgorithmManager(config)
         self.models, self.auxiliary_models = create_inference_models(config)
         self.experience_pipeline = self._init_experience_pipeline()
-        self.config.buffer.explorer_input.taskset.index = explorer_meta.get("latest_task_index", 0)
+        self.config.buffer.explorer_input.taskset.index = explorer_state.get("latest_task_index", 0)
         self.taskset = get_buffer_reader(
             self.config.buffer.explorer_input.taskset, self.config.buffer
         )
-        self.scheduler = self._init_scheduler()
+        self.scheduler = Scheduler(self.config, self.models, self.auxiliary_models)
         self.monitor = MONITOR.get(self.config.monitor.monitor_type)(
             project=self.config.project,
             group=self.config.group,
@@ -102,15 +102,6 @@ class Explorer:
             for i, model in enumerate(self.models)
         ]
         await asyncio.gather(*refs)
-
-    def _init_scheduler(self) -> Scheduler:
-        if self.config.explorer.rollout_model.engine_type != "vllm_async":
-            # sync model requires the same number of runners as the number of models
-            self.config.explorer.runner_per_model = 1
-            self.logger.info(
-                "Sync vLLM model requires the same number of runners as the number of models"
-            )
-        return Scheduler(self.config, self.models, self.auxiliary_models)
 
     async def _checkpoint_weights_update(self, step_num: Optional[int] = None) -> int:
         step_num = await self.synchronizer.set_model_state_dict_with_step_num.remote(step_num)
@@ -209,11 +200,6 @@ class Explorer:
         return self.config.explorer.name
 
     async def explore_step(self) -> bool:
-        algo_config = self.algorithm_manager.get_current_algorithm_config(self.explore_step_num + 1)
-        # skip warmup
-        if algo_config.algorithm_type == "sft":
-            self.explore_step_num += 1
-            return True
         try:
             tasks = await self.taskset.read_async()
         except StopAsyncIteration:
@@ -326,7 +312,7 @@ class Explorer:
             )
 
         # save explore checkpoint
-        self.cache.save_explorer(
+        self.state.save_explorer(
             current_step=self.explore_step_num,
             current_task_index=self.explore_step_num * self.config.buffer.batch_size,
         )
@@ -345,7 +331,6 @@ class Explorer:
     async def _finish_explore_step(self, step: int, model_version: int) -> None:
         statuses, exps = await self.scheduler.get_results(batch_id=step)
         metric = {"rollout/model_version": model_version}
-        # TODO: avoid blocking
         pipeline_metrics = await self.experience_pipeline.process.remote(exps)
         metric.update(pipeline_metrics)
         if statuses:

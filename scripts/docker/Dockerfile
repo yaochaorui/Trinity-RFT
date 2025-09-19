@@ -5,7 +5,7 @@
 # docker run -it --gpus all --shm-size="64g" --rm -v $PWD:/workspace -v <root_path_of_data_and_checkpoints>:/data trinity-rft:latest
 
 
-FROM nvcr.io/nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+FROM nvcr.io/nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
 
 WORKDIR /workspace
 
@@ -15,7 +15,8 @@ RUN apt update && apt install -y \
     python3 python3-pip python3-dev python3-packaging \
     libomp-dev infiniband-diags libibverbs-dev librdmacm-dev rdma-core perftest \
     && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/python3 /usr/bin/python
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && ln -sf /usr/bin/pip3 /usr/bin/pip
 
 
 # For Aliyun users: update pip mirror to aliyun to speed up pip install

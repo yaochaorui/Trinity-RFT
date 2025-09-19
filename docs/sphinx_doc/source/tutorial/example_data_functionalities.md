@@ -19,13 +19,13 @@ An overview of the data processor is shown in the following figure.
 
 ## Example: Data Processor for Task Pipeline
 
-In this example, you will learn how to apply the data processor of Trinity-RFT to prepare and prioritize the dataset before task exploring and training. This example takes GSM-8K dataset as the example dataset to figure out:
+In this example, you will learn how to apply the data processor of Trinity-RFT to prepare and prioritize the dataset before task exploring and training. This example takes GSM8K dataset as the example dataset to figure out:
 
 1. how to prepare the data processor
 2. how to configure the data processor
 3. what the data processor can do
 
-Before getting started, you need to prepare the main environment of Trinity-RFT according to the [installation section of Quickstart](example_reasoning_basic.md),
+Before getting started, you need to prepare the main environment of Trinity-RFT according to the [installation section of Quickstart](example_reasoning_basic.md#step-0-environment-preparation),
 and store the base url and api key in the environment variables `OPENAI_BASE_URL` and `OPENAI_API_KEY` for some agentic or API-model usages if necessary.
 
 Besides, for starting the data processor server automatically, you also need to install the dependencies in the `data` split.
@@ -53,14 +53,14 @@ data_processor:
           input_keys: ["question", "answer"]
           field_names: ["Question", "Answer"]
     inputs:  # the output will be set to the explorer input automatically
-      - /PATH/TO/GSM8K/DATA/FILE
+      - ${oc.env:TRINITY_TASKSET_PATH}
     target_fields: ["question", "answer"]
 service:
   data_juicer:
     auto_start: true
 ```
 
-Here you can set the input files for the GSM-8K dataset and some other items about task pipeline:
+Here you can set the input files for the GSM8K dataset and some other items about task pipeline:
 
 + `task_pipeline`: the configs for the task pipeline. Task pipeline is used to process the raw dataset. It consists of several inner configs:
   + `num_process`: the number of processes to use for the task pipeline.
@@ -73,7 +73,7 @@ It's worth noticing that we don't need to set the output path usually, cause it 
 The data processing of Data-Juicer is maintained as a service. Thus we need to config the data-juicer service.
 Luckily, Trinity-RFT provides an auto-start way to start the data processor server automatically. All you need to do is to set the `auto_start` of `data-juicer` service to `true` in the `service` section.
 
-All config items in the `data_processor` section can be found [here](trinity_configs.md). A prepared config file for this example of GSM-8K can be found in [the config file](https://github.com/modelscope/Trinity-RFT/tree/main/examples/grpo_gsm8k_task_pipeline/gsm8k.yaml).
+All config items in the `data_processor` section can be found [here](trinity_configs.md). A prepared config file for this example of GSM8K can be found in [the config file](https://github.com/modelscope/Trinity-RFT/tree/main/examples/grpo_gsm8k_task_pipeline/gsm8k.yaml).
 
 ```{note}
 Only when one of `xxx_pipeline` is provided, and one of `dj_process_desc` and `dj_config_path` in the pipeline config is provided, the data processor and the data active iterator will be activated. Otherwise, this part will be skipped and it will enter into the exploring stage directly.
@@ -97,7 +97,7 @@ If you follow the steps above, Trinity-RFT will send a request to the data proce
 
 ## Example: Data Processor for Experience Pipeline
 
-In this example, you will learn how to apply the data processor of Trinity-RFT to reshape rewards of experiences after exploring. This example takes GSM-8K dataset as the example dataset to figure out how to reshape rewards of experiences from the explorer before sent to the trainer from a view of the quality of generated responses.
+In this example, you will learn how to apply the data processor of Trinity-RFT to reshape rewards of experiences after exploring. This example takes GSM8K dataset as the example dataset to figure out how to reshape rewards of experiences from the explorer before sent to the trainer from a view of the quality of generated responses.
 
 In addition to the automatic way to start the data processor server in the previous example, you can also start it manually.
 
@@ -174,7 +174,7 @@ process:
       field_names: ["prompt", "response"]
 ```
 
-All config items in the `data_processor` section can be found [here](trinity_configs.md). A prepared config file for this example of GSM-8K can be found in [the config file](https://github.com/modelscope/Trinity-RFT/tree/main/examples/grpo_gsm8k_experience_pipeline/gsm8k.yaml).
+All config items in the `data_processor` section can be found [here](trinity_configs.md). A prepared config file for this example of GSM8K can be found in [the config file](https://github.com/modelscope/Trinity-RFT/tree/main/examples/grpo_gsm8k_experience_pipeline/gsm8k.yaml).
 
 ### Exploring & Training
 After preparing the config files of Trinity-RFT, you can start your ray cluster and run the RFT process including the data active iterator part with the following commands:
@@ -212,6 +212,7 @@ Trinity-RFT uses a unified config file to manage all config items. For the data 
 In this example, assume that you need to select the chosen and rejected responses for DPO method. So you can set these config items like the following example:
 
 ```yaml
+# using task pipeline to decide the chosen and rejected from human preference
 data_processor:
   # task pipeline related
   task_pipeline:
@@ -239,7 +240,7 @@ data_processor:
           chosen_key: "chosen"  # Chosen field
           rejected_key: "rejected"  # Rejected field
     inputs:  # the output will be set to the explorer input automatically
-      - /PATH/TO/DATA/FILE/TO/BE/ANNOTATED
+      - 'examples/dpo_human_in_the_loop/demo-data.jsonl'
     target_fields: ["prompt"]
 service:
   data_juicer:
@@ -251,6 +252,8 @@ Here you can set the basic information for the example dataset and some other it
 The difference is that we use the data-juicer OP `human_preference_annotation_mapper` here. This OP helps you to annotate the data with human preference on a UI.
 
 You can set more config items for this OP (e.g. notification when annotation is finished). For more details, please refer to this [doc](https://github.com/modelscope/data-juicer/tree/main/configs/annotation).
+
+All config items in the `data_processor` section can be found [here](trinity_configs.md). A prepared config file for this example can be found in [the config file](https://github.com/modelscope/Trinity-RFT/tree/main/examples/dpo_human_in_the_loop/dpo.yaml).
 
 ### Start Running
 

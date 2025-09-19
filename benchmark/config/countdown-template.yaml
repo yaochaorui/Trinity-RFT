@@ -40,18 +40,15 @@ buffer:
     experience_buffer:
       name: experience_buffer
       storage_type: queue
-      path: ''
       use_priority_queue: true
       replay_buffer_kwargs:
         priority_fn: linear_decay
         decay: 0.1
-    sft_warmup_steps: 0
 explorer:
-  runner_num: 32
+  runner_per_model: 8
   max_timeout: 900
   max_retry_times: 2
   rollout_model:
-    engine_type: vllm_async
     engine_num: 2
     tensor_parallel_size: 1
     use_v1: true
@@ -70,6 +67,7 @@ explorer:
 trainer:
   trainer_type: verl
   save_interval: 100
+  total_steps: 1000
   enable_preview: true
   actor_grad_clip: 1.0
   trainer_config:
@@ -101,7 +99,6 @@ trainer:
           lr: 1.0e-06
           lr_warmup_steps_ratio: 0.0
           warmup_style: constant
-          total_training_steps: -1
         fsdp_config:
           wrap_policy:
             min_num_params: 0
@@ -129,14 +126,12 @@ trainer:
         kl_coef: 0.001
     trainer:
       balance_batch: true
-      total_training_steps: 1000
       resume_mode: auto
       resume_from_path: ''
       critic_warmup: 0
       default_hdfs_dir: null
       remove_previous_ckpt_in_save: false
       del_local_ckpt_after_load: false
-      val_before_train: false
       max_actor_ckpt_to_keep: null
       max_critic_ckpt_to_keep: null
     critic:
@@ -145,7 +140,6 @@ trainer:
         lr: 1.0e-05
         lr_warmup_steps_ratio: 0.0
         warmup_style: constant
-        total_training_steps: -1
       model:
         override_config: {}
         external_lib: null

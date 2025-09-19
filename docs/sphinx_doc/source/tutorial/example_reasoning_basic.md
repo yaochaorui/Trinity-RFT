@@ -100,18 +100,18 @@ We run the experiment in a synchronous mode where the Explorer and Trainer opera
 
 ### Use GRPO Algorithm
 
-We use the configurations in [`gsm8k.yaml`](https://github.com/modelscope/Trinity-RFT/tree/main/examples/grpo_gsm8k/gsm8k.yaml) and [`train_gsm8k.yaml`](https://github.com/modelscope/Trinity-RFT/tree/main/examples/grpo_gsm8k/train_gsm8k.yaml) for this experiment. Some important setups of `gsm8k.yaml` are listed in the following:
+We use the configurations in [`gsm8k.yaml`](https://github.com/modelscope/Trinity-RFT/tree/main/examples/grpo_gsm8k/gsm8k.yaml) for this experiment. Some important setups of `gsm8k.yaml` are listed in the following:
 
 
 ```yaml
 project: <project_name>
 name: <experiment_name>
-checkpoint_root_dir: /PATH/TO/CHECKPOINT/
+checkpoint_root_dir: ${oc.env:TRINITY_CHECKPOINT_ROOT_DIR,./checkpoints}
 algorithm:
   algorithm_type: grpo
   repeat_times: 8
 model:
-  model_path: /PATH/TO/MODEL/
+  model_path: ${oc.env:TRINITY_MODEL_PATH,Qwen/Qwen2.5-1.5B-Instruct}
 cluster:
   node_num: 1
   gpu_per_node: 2
@@ -122,7 +122,7 @@ buffer:
     taskset:
       name: gsm8k
       storage_type: file
-      path: <$DATASET_PATH/gsm8k>
+      path: 'openai/gsm8k'
       subset_name: 'main'
       split: 'train'
       format:
@@ -133,7 +133,7 @@ buffer:
     eval_tasksets:
     - name: gsm8k-eval
       storage_type: file
-      path: <$DATASET_PATH/gsm8k>
+      path: 'openai/gsm8k'
       subset_name: 'main'
       split: 'test'
       format:
@@ -149,21 +149,24 @@ explorer:
   eval_interval: 50
   runner_num: 16
   rollout_model:
-    engine_type: vllm_async
     engine_num: 1
 synchronizer:
   sync_method: 'nccl'
   sync_interval: 1
 trainer:
-  trainer_config_path: 'examples/grpo_gsm8k/train_gsm8k.yaml'
   save_interval: 100
-
+  trainer_config:
+    actor_rollout_ref:
+      actor:
+        optim:
+          lr: 1e-5
 ```
 
 
 ### Run the Experiment
 
 Run the RFT process with the following command:
+
 ```bash
 trinity run --config examples/grpo_gsm8k/gsm8k.yaml
 ```
@@ -172,23 +175,27 @@ trinity run --config examples/grpo_gsm8k/gsm8k.yaml
 
 ## Optional: RFT with SFT Warmup
 
-Before RFT, we may use SFT as a warmup step. We need to set `buffer.trainer_input.sft_warmup_steps > 0` and prepare the SFT data to `buffer.trainer_input.sft_warmup_dataset.path=$DATASET_PATH/{sft_data}`.
+Before RFT, we may use SFT as a warmup step. Trinity-RFT supports adding SFT warmup stage before RFT by setting `stages` in the config file. The `sft_warmup_dataset` specifies the dataset used for SFT warmup, and `sft_warmup_steps` specifies the number of training steps for SFT warmup.
 
 ```yaml
 # Properly add the following configs in gsm8k.yaml
-buffer:
-  trainer_input:
-    sft_warmup_dataset:
-      storage_type: file
-      path: <$DATASET_PATH/{sft_data}>
-      format:
-        prompt_type: <prompt_type> # messages/plaintext
-        prompt_key: <prompt_key>
-        response_key: <response_key>
-    sft_warmup_steps: 10
+stages:
+  - stage_name: sft_warmup
+    mode: train
+    algorithm:
+      algorithm_type: sft
+    buffer:
+      train_batch_size: 128
+      total_steps: 10
+      trainer_input:
+        experience_buffer:
+          name: sft_warmup_dataset
+          path: /PATH/TO/YOUR/SFT/DATASET
+  - stage_name: rft  # leave empty to use the original configs for RFT
 ```
 
 The following command runs SFT and RFT in sequence:
+
 ```bash
 trinity run --config examples/grpo_gsm8k/gsm8k.yaml
 ```

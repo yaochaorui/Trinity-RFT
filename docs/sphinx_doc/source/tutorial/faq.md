@@ -1,23 +1,21 @@
 # FAQ
 
 ## Part 1: Configurations
-**Q:** Why do most examples have two configuration YAML files, e.g., `gsm8k.yaml` and `train_gsm8k.yaml` in the `examples/grpo_gsm8k` directory?
+**Q:** How do I configure the parameters?
 
-**A:** Trinity-RFT uses [veRL](https://github.com/volcengine/verl) as the training backend, and the auxiliary YAML file starting with `train_` is used for configuring veRL, referred to [veRL documentation](https://verl.readthedocs.io/en/latest/examples/config.html).
-If you specify the path to `train_gsm8k.yaml` in `trainer.trainer_config_path`, Trinity-RFT will automatically pass the parameters to veRL.
+**A:** You can use the config manager to configure the parameters by running `trinity studio --port 8080`. This approach provides a convenient way to configure the parameters.
 
-We provide an alternative way to configure the veRL trainer. You may also directly specify the parameters in the `trainer.trainer_config` dictionary. This approach is mutually exclusive with using `trainer.trainer_config_path`.
-
-Note that some parameters are not listed in the auxiliary configuration file (e.g., `train_gsm8k.yaml`), as they will be overridden by the parameters in the trinity configuration file (e.g., `gsm8k.yaml`). Please refer to `./trinity_configs.md` for more details.
-For users' convenience, future versions will gradually reduce parameters in `trainer.trainer_config` and `trainer.trainer_config_path` until it's fully deprecated.
+Advanced users can also edit the config file directly, referred to the YAML files in `examples`.
+Trinity-RFT uses [veRL](https://github.com/volcengine/verl) as the training backend, which can have massive parameters, referred to [veRL documentation](https://verl.readthedocs.io/en/latest/examples/config.html). You may specify these parameters in two ways: (1) specify the parameters in the `trainer.trainer_config` dictionary; (2) specify them in an auxiliary YAML file starting with `train_` and pass the path to `train_gsm8k.yaml` in `trainer.trainer_config_path`. These two ways are mutually exclusive.
 
 ---
 
-**Q:** What's the relationship between `buffer.batch_size`, `actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu` and other batch sizes?
+**Q:** What's the relationship between `buffer.batch_size`, `buffer.train_batch_size`, `actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu` and other batch sizes?
 
 **A:** The following parameters are closely related:
 
-- `buffer.batch_size`: The number of tasks in a batch, effective for both the explorer and the trainer.
+- `buffer.batch_size`: The number of tasks in a batch, effective for the explorer.
+- `buffer.train_batch_size`: The number of experiences in a mini-batch, effective for the trainer. If not specified, it defaults to `buffer.batch_size` * `algorithm.repeat_times`.
 - `actor_rollout_ref.actor.ppo_mini_batch_size`: The number of experiences in a mini-batch, overridden by `buffer.train_batch_size`; but in the `update_policy` function, its value becomes the number of experiences in a mini-batch per GPU, i.e., `buffer.train_batch_size (/ ngpus_trainer)`. The expression of dividing `ngpus_trainer` is caused by implict data allocation to GPUs, but this do not affects the result after gradient accumulation.
 - `actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu`: The number of experiences in a micro-batch per GPU.
 
@@ -65,7 +63,7 @@ File ".../flash_attn/flash_attn_interface.py", line 15, in ‹module>
 ImportError: ...
 ```
 
-**A:** The `flash-attn` module is not properly installed. Try to fix it by running `pip install flash-attn==2.8.0.post2` or `pip install flash-attn==2.8.0.post2 -v --no-build-isolation`.
+**A:** The `flash-attn` module is not properly installed. Try to fix it by running `pip install flash-attn==2.8.1` or `pip install flash-attn==2.8.1 -v --no-build-isolation`.
 
 ---
 
@@ -74,7 +72,7 @@ ImportError: ...
 UsageError: api_key not configured (no-tty). call wandb.login(key=[your_api_key]) ...
 ```
 
-**A:** Try to log in to WandB before starting Ray and running the experiment. One way to do this is run the command `export WANDB_API_KEY=[your_api_key]`.
+**A:** Try to log in to WandB before starting Ray and running the experiment. One way to do this is run the command `export WANDB_API_KEY=[your_api_key]`. Yoy may also try using other monitors instead of WandB by setting `monitor.monitor_type=tensorboard/mlflow`.
 
 ---
 
@@ -97,11 +95,13 @@ ray start --head
 **A:** The following parameters may be helpful:
 
 - For trainer, adjust `actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu` when `actor_rollout_ref.actor.use_dynamic_bsz=false`; adjust `actor_rollout_ref.actor.ppo_max_token_len_per_gpu` and `actor_rollout_ref.actor.ulysses_sequence_parallel_size` when `actor_rollout_ref.actor.use_dynamic_bsz=true`. Setting `actor_rollout_ref.actor.entropy_from_logits_with_chunking=true` may also help.
-- For explorer, adjust `explorer.rollout_model.tensor_parallel_size`,
+- For explorer, adjust `explorer.rollout_model.tensor_parallel_size`.
 
 
-## Part 3: Debugging Methods [Coming Soon]
-To see the full logs of all processes and save it to `debug.log`:
+## Part 3: Debugging Methods
+Trinity-RFT now supports the actor-level logs, which automatically saves the logs for each actor (such as explorer and trainer) to `<checkpoint_job_dir>/log/<actor_name>`. To see the more detailed logs, change the default log level (`info`) to `debug`, by setting `log.level=debug` in config file.
+
+Alternatively, if you want to look at the full logs of all processes and save it to `debug.log`:
 ```bash
 export RAY_DEDUP_LOGS=0
 trinity run --config grpo_gsm8k/gsm8k.yaml 2>&1 | tee debug.log
@@ -148,14 +148,16 @@ for exp in exp_list:
 
 **A:** You need to specify model path and checkpoint path. The following code snippet gives an example with transformers.
 
+Here is an example of loading from fsdp trainer checkpoints:
+
 ```python
 import os
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from trinity.common.models.utils import load_state_dict_from_verl_checkpoint
+from trinity.common.models.utils import load_fsdp_state_dict_from_verl_checkpoint
 
 # Assume we need the checkpoint at step 780;
 # model_path, checkpoint_root_dir, project, and name are already defined
 model = AutoModelForCausalLM.from_pretrained(model_path)
 ckp_path = os.path.join(checkpoint_root_dir, project, name, "global_step_780", "actor")
-model.load_state_dict(load_state_dict_from_verl_checkpoint(ckp_path))
+model.load_state_dict(load_fsdp_state_dict_from_verl_checkpoint(ckp_path))
 ```

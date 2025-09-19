@@ -1,11 +1,14 @@
+import json
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 
 from trinity.common.config import FormatConfig, StorageConfig
 from trinity.common.constants import PromptType
 from trinity.common.experience import Experience
+from trinity.common.models.utils import get_action_mask_method
 from trinity.common.rewards import REWARD_FUNCTIONS
 from trinity.common.workflows import WORKFLOWS, Task
+from trinity.utils.log import get_logger
 from trinity.utils.registry import Registry
 
 FORMATTER = Registry("formatter")
@@ -97,12 +100,17 @@ class SFTFormatter(ExperienceFormatter):
     """
 
     def __init__(self, tokenizer, format_config: FormatConfig):
+        self.logger = get_logger("sft_dataset_formatter", in_ray_actor=True)
         self.tokenizer = tokenizer
         self.prompt_type = format_config.prompt_type
+        self.enable_concatenated_multi_turn = format_config.enable_concatenated_multi_turn
+        self.chat_template = format_config.chat_template or tokenizer.chat_template
         # For messages type
         if self.prompt_type == PromptType.MESSAGES:
             self.messages_key = format_config.messages_key
             self.tools_key = format_config.tools_key
+            if format_config.enable_concatenated_multi_turn:
+                self.action_mask_method = get_action_mask_method(self.chat_template)
         # For plaintext type
         elif self.prompt_type == PromptType.PLAINTEXT:
             self.prompt_key = format_config.prompt_key
@@ -114,19 +122,77 @@ class SFTFormatter(ExperienceFormatter):
             raise ValueError(f"Unsupported prompt_type: {self.prompt_type}")
 
     def _messages_to_experience(
-        self, messages: List[Dict], tools: Optional[List[Dict]] = None
+        self,
+        messages: List[Dict] | str,  # or could be str from json dumps
+        tools: Optional[List[Dict] | str] = None,  # or could also be str from json dumps
     ) -> Experience:
+        """Convert messages and tools into an Experience object.
+
+        Args:
+            messages (List[Dict]|str): The list of message dictionaries or a JSON string.
+            tools (Optional[List[Dict]|str], optional): The list of tool dictionaries or a JSON string. Defaults to None.
+
+        Returns:
+            Experience: The resulting Experience object.
+        """
+        if isinstance(messages, str):
+            try:
+                messages = json.loads(messages)
+            except json.JSONDecodeError:
+                self.logger.error(
+                    "[SFT Data Error] Failed to decode 'messages' JSON. please check your data format."
+                )
+                raise ValueError("Invalid JSON format for messages")
+        # Warning if tools is accidentally provided as list of dicts (with Huggingface datasets this may cause schema issues)
+        if tools is not None and isinstance(tools, list):
+            self.logger.warning(
+                "[SFT Data Warning] 'tools' is provided as a list of dictionaries. "
+                "When loading with Huggingface Datasets, schema auto-alignment may set unmatched fields to null, "
+                "potentially causing undesired behavior. "
+                "It is recommended to pre-process 'tools' objects with json.dumps before saving/loading, "
+                "and to restore them with json.loads in this function."
+            )
+        if isinstance(tools, str):
+            try:
+                tools = json.loads(tools)
+            except json.JSONDecodeError:
+                self.logger.error(
+                    "[SFT Data Error] Failed to decode 'tools' JSON. Please check your data format."
+                )
+                raise ValueError("Invalid JSON format for tools")
         tokens = self.tokenizer.apply_chat_template(
-            messages, tools=tools, add_generation_prompt=False, return_tensors="pt"
+            messages,
+            tools=tools,
+            add_generation_prompt=False,
+            return_tensors="pt",
+            chat_template=self.chat_template,
         )[0]
-        prompt_tokens_ids = self.tokenizer.apply_chat_template(
-            messages[:-1], tools=tools, add_generation_prompt=True, return_tensors="pt"
-        )[0]
-        return Experience(
-            tokens=tokens,
-            prompt_length=len(prompt_tokens_ids),
-            messages=messages,
-        )
+        if self.enable_concatenated_multi_turn:
+            token_ids, action_mask, prompt_length = self.action_mask_method(
+                tokenizer=self.tokenizer,
+                messages=messages,
+                tools=tools,
+                chat_template=self.chat_template,
+            )
+            return Experience(
+                tokens=token_ids,
+                action_mask=action_mask[prompt_length:],
+                prompt_length=prompt_length,
+                messages=messages,
+            )
+        else:
+            prompt_tokens_ids = self.tokenizer.apply_chat_template(
+                messages[:-1],
+                tools=tools,
+                add_generation_prompt=True,
+                return_tensors="pt",
+                chat_template=self.chat_template,
+            )[0]
+            return Experience(
+                tokens=tokens,
+                prompt_length=len(prompt_tokens_ids),
+                messages=messages,
+            )
 
     def format(self, sample: Dict) -> Experience:
         if self.prompt_type == PromptType.MESSAGES:
@@ -181,6 +247,7 @@ class DPOFormatter(ExperienceFormatter):
     def __init__(self, tokenizer, format_config: FormatConfig):
         self.tokenizer = tokenizer
         self.prompt_type = format_config.prompt_type
+        self.chat_template = format_config.chat_template
         if self.prompt_type == PromptType.PLAINTEXT:
             self.prompt_key = format_config.prompt_key
             self.chosen_key = format_config.chosen_key
@@ -199,13 +266,22 @@ class DPOFormatter(ExperienceFormatter):
         self, prompt_messages, chosen_messages, rejected_messages
     ) -> Experience:
         prompt_tokens = self.tokenizer.apply_chat_template(
-            prompt_messages, add_generation_prompt=True, return_tensors="pt"
+            prompt_messages,
+            add_generation_prompt=True,
+            return_tensors="pt",
+            chat_template=self.chat_template,
         )[0]
         chosen_tokens = self.tokenizer.apply_chat_template(
-            prompt_messages + chosen_messages, add_generation_prompt=False, return_tensors="pt"
+            prompt_messages + chosen_messages,
+            add_generation_prompt=False,
+            return_tensors="pt",
+            chat_template=self.chat_template,
         )[0][len(prompt_tokens) :]
         rejected_tokens = self.tokenizer.apply_chat_template(
-            prompt_messages + rejected_messages, add_generation_prompt=False, return_tensors="pt"
+            prompt_messages + rejected_messages,
+            add_generation_prompt=False,
+            return_tensors="pt",
+            chat_template=self.chat_template,
         )[0][len(prompt_tokens) :]
         return Experience(
             tokens=prompt_tokens,

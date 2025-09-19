@@ -7,9 +7,10 @@ import time
 import unittest
 from copy import deepcopy
 from datetime import datetime
+from unittest import mock
 
 import ray
-from parameterized import parameterized, parameterized_class
+from parameterized import parameterized_class
 
 from tests.tools import (
     RayUnittestBase,
@@ -18,9 +19,18 @@ from tests.tools import (
     get_model_path,
     get_template_config,
     get_unittest_dataset_config,
+    get_vision_languge_model_path,
 )
-from trinity.cli.launcher import bench, both, explore, train
-from trinity.common.config import Config, StorageConfig
+from trinity.cli.launcher import bench, both, explore, run, train
+from trinity.common.config import (
+    AlgorithmConfig,
+    BufferConfig,
+    Config,
+    ExplorerInput,
+    StageConfig,
+    StorageConfig,
+    TrainerInput,
+)
 from trinity.common.constants import (
     LOG_DIR_ENV_VAR,
     LOG_LEVEL_ENV_VAR,
@@ -29,7 +39,7 @@ from trinity.common.constants import (
     SyncStyle,
 )
 from trinity.common.models.utils import get_checkpoint_dir_with_step_num
-from trinity.manager.manager import CacheManager
+from trinity.manager.state_manager import StateManager
 
 
 class BaseTrainerCase(RayUnittestBase):
@@ -50,11 +60,17 @@ class BaseTrainerCase(RayUnittestBase):
         self.config.explorer.eval_interval = 4
 
 
+@parameterized_class(
+    ("strategy",),
+    [
+        ("fsdp",),
+        ("megatron",),
+    ],
+)
 class TestTrainerCountdown(BaseTrainerCase):
     def test_trainer(self):
         """Test the both and bench mode."""
         # test both mode
-        self.config.explorer.rollout_model.use_v1 = False
         self.config.buffer.explorer_input.taskset = get_unittest_dataset_config("countdown")
         self.config.buffer.explorer_input.eval_tasksets.append(
             get_unittest_dataset_config("countdown", "test")
@@ -64,8 +80,15 @@ class TestTrainerCountdown(BaseTrainerCase):
         )
         self.config.trainer.save_interval = 4
         self.config.check_and_update()
-        self.config.trainer.trainer_config.trainer.max_actor_ckpt_to_keep = 2
-        self.config.trainer.trainer_config.trainer.max_critic_ckpt_to_keep = 2
+        _trainer_config = self.config.trainer.trainer_config
+        if self.strategy == "megatron":
+            _trainer_config.actor_rollout_ref.actor.strategy = "megatron"
+            _trainer_config.actor_rollout_ref.actor.megatron.tensor_model_parallel_size = 2
+            _trainer_config.actor_rollout_ref.ref.megatron.tensor_model_parallel_size = 2
+            _trainer_config.critic.strategy = "megatron"
+            _trainer_config.critic.megatron.tensor_model_parallel_size = 2
+        _trainer_config.trainer.max_actor_ckpt_to_keep = 2
+        _trainer_config.trainer.max_critic_ckpt_to_keep = 2
         both(self.config)
         parser = TensorBoardParser(os.path.join(self.config.monitor.cache_dir, "tensorboard"))
         rollout_metrics = parser.metric_list("rollout")
@@ -99,7 +122,6 @@ class TestTrainerCountdown(BaseTrainerCase):
         self.assertTrue(len(os.listdir(os.path.join(checkpoint_step_4, "actor"))) > 0)
         self.assertTrue(len(os.listdir(os.path.join(checkpoint_step_8, "actor"))) > 0)
         self.assertEqual(step_num, 8)
-        # TODO: Reinit will fail when using v1 engine, find a way to fix it
         ray.init(ignore_reinit_error=True, namespace=self.config.ray_namespace)
         # test bench mode
         self.config.mode = "bench"
@@ -234,58 +256,95 @@ class TestTrainerGSM8K(BaseTrainerCase):
 
 
 class TestTrainerSFTWarmupGSM8K(BaseTrainerCase):
-    def test_trainer(self):
+    @mock.patch("trinity.cli.launcher.load_config")
+    def test_trainer(self, mock_load):
         """Test GSM8K With SFT."""
         # test both mode
-        self.config.algorithm.algorithm_type = "grpo"
-        self.config.algorithm.repeat_times = 4
-        self.config.algorithm.advantage_fn = "grpo"
-        self.config.algorithm.advantage_fn_args = {}
-        self.config.buffer.total_epochs = 1
-        self.config.buffer.explorer_input.taskset = get_unittest_dataset_config("gsm8k")
         self.config.synchronizer.sync_interval = 1
         self.config.trainer.save_interval = 8
-        # sft data is only enough for 2 steps
-        self.config.buffer.trainer_input.sft_warmup_dataset = get_unittest_dataset_config(
-            "sft_for_gsm8k"
-        )
-        self.config.buffer.trainer_input.sft_warmup_steps = 3
-        self.config.buffer.trainer_input.experience_buffer = StorageConfig(
-            name="test_sql_storage",
-            max_read_timeout=20,
-            storage_type=StorageType.SQL,
-            max_retry_times=10,
-        )
+        self.config.stages = [
+            StageConfig(
+                stage_name="sft_warmup",
+                mode="train",
+                algorithm=AlgorithmConfig(algorithm_type="sft"),
+                buffer=BufferConfig(
+                    total_steps=3,
+                    train_batch_size=4,
+                    trainer_input=TrainerInput(
+                        experience_buffer=get_unittest_dataset_config("sft_for_gsm8k")
+                    ),
+                ),
+            ),
+            StageConfig(
+                stage_name="grpo",
+                mode="both",
+                algorithm=AlgorithmConfig(
+                    algorithm_type="grpo",
+                    repeat_times=4,
+                ),
+                buffer=BufferConfig(
+                    batch_size=4,
+                    explorer_input=ExplorerInput(taskset=get_unittest_dataset_config("gsm8k")),
+                    trainer_input=TrainerInput(
+                        experience_buffer=StorageConfig(
+                            name="test_queue_storage",
+                            max_read_timeout=20,
+                            storage_type=StorageType.QUEUE,
+                            max_retry_times=10,
+                        )
+                    ),
+                    total_epochs=1,
+                ),
+            ),
+        ]
         self.config.check_and_update()
-        self.config.trainer.trainer_config.trainer.max_actor_ckpt_to_keep = 2
-        self.config.trainer.trainer_config.actor_rollout_ref.actor.optim.lr = 1e-5
-        both(self.config)
-        parser = TensorBoardParser(os.path.join(self.config.monitor.cache_dir, "tensorboard"))
+
+        mock_load.return_value = self.config
+
+        run(config_path="dummy.yaml")
+
+        stage_configs = [cfg.check_and_update() for cfg in self.config]
+
+        # sft warmup stage
+        sft_config = stage_configs[0]
+        parser = TensorBoardParser(os.path.join(sft_config.monitor.cache_dir, "tensorboard"))
         rollout_metrics = parser.metric_list("rollout")
-        self.assertTrue(len(rollout_metrics) > 0)
-        self.assertEqual(parser.metric_max_step(rollout_metrics[0]), 7)
-        actor_metrics = parser.metric_list("actor")
-        self.assertTrue(len(actor_metrics) > 0)
+        self.assertTrue(len(rollout_metrics) == 0)
         sft_metrics = parser.metric_list("actor/sft")
-        self.assertEqual(parser.metric_max_step(sft_metrics[0]), 3)  # SFT
-        self.assertEqual(parser.metric_max_step(actor_metrics[-1]), 7)  # RFT
+        self.assertTrue(len(sft_metrics) > 0)
+        self.assertEqual(parser.metric_max_step(sft_metrics[0]), 3)
         response_metrics = parser.metric_list("response_length")
         self.assertTrue(len(response_metrics) > 0)
         self.assertEqual(parser.metric_min_step(response_metrics[0]), 1)
-        self.assertEqual(parser.metric_max_step(response_metrics[0]), 7)
+        self.assertEqual(parser.metric_max_step(response_metrics[0]), 3)
+
+        # grpo stage
+        grpo_config = stage_configs[1]
+        parser = TensorBoardParser(os.path.join(grpo_config.monitor.cache_dir, "tensorboard"))
+        rollout_metrics = parser.metric_list("rollout")
+        self.assertTrue(len(rollout_metrics) > 0)
+        self.assertEqual(parser.metric_max_step(rollout_metrics[0]), 4)
+        actor_metrics = parser.metric_list("actor")
+        self.assertTrue(len(actor_metrics) > 0)
+        sft_metrics = parser.metric_list("actor/sft")
+        self.assertTrue(len(sft_metrics) == 0)
+        response_metrics = parser.metric_list("response_length")
+        self.assertTrue(len(response_metrics) > 0)
+        self.assertEqual(parser.metric_min_step(response_metrics[0]), 1)
+        self.assertEqual(parser.metric_max_step(response_metrics[0]), 4)
         # test save checkpoint when sft finish
         self.assertEqual(
             get_checkpoint_dir_with_step_num(
-                checkpoint_root_path=self.config.checkpoint_job_dir, trainer_type="verl", step_num=2
+                checkpoint_root_path=sft_config.checkpoint_job_dir, trainer_type="verl", step_num=2
             )[1],
             2,
         )
         # test save checkpoint at last step
         checkpoint_dir, step_num = get_checkpoint_dir_with_step_num(
-            checkpoint_root_path=self.config.checkpoint_job_dir,
+            checkpoint_root_path=grpo_config.checkpoint_job_dir,
             trainer_type="verl",
         )
-        self.assertEqual(step_num, 7)
+        self.assertEqual(step_num, 4)
         self.assertTrue(len(os.listdir(os.path.join(checkpoint_dir, "actor"))) > 0)
 
     def tearDown(self):
@@ -402,24 +461,16 @@ def run_explorer(config: Config) -> None:
     explore(config)
 
 
+@parameterized_class(
+    ("use_priority_queue", "strategy"),
+    [(False, "fsdp"), (True, "fsdp"), (True, "megatron")],
+)
 class TestFullyAsyncMode(unittest.TestCase):
     def setUp(self):
         if multiprocessing.get_start_method(allow_none=True) != "spawn":
             multiprocessing.set_start_method("spawn", force=True)
 
-    @parameterized.expand(
-        [
-            (
-                "queue",
-                False,
-            ),
-            (
-                "priority_queue",
-                True,
-            ),
-        ]
-    )
-    def test_fully_async_mode(self, name, use_priority_queue):
+    def test_fully_async_mode(self):
         config = get_template_config()
         config.project = "unittest"
         config.name = f"fully_async_{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -433,7 +484,7 @@ class TestFullyAsyncMode(unittest.TestCase):
         config.buffer.trainer_input.experience_buffer = StorageConfig(
             name="exp_buffer",
             storage_type=StorageType.QUEUE,
-            use_priority_queue=use_priority_queue,
+            use_priority_queue=self.use_priority_queue,
         )
         config.synchronizer.sync_method = SyncMethod.CHECKPOINT
         config.synchronizer.sync_style = SyncStyle.DYNAMIC_BY_EXPLORER
@@ -443,8 +494,16 @@ class TestFullyAsyncMode(unittest.TestCase):
         trainer_config.mode = "train"
         trainer_config.buffer.train_batch_size = 4
         trainer_config.check_and_update()
+        if self.strategy == "megatron":
+            _trainer_config = trainer_config.trainer.trainer_config
+            _trainer_config.actor_rollout_ref.actor.strategy = "megatron"
+            _trainer_config.actor_rollout_ref.actor.megatron.tensor_model_parallel_size = 2
+            _trainer_config.actor_rollout_ref.ref.megatron.tensor_model_parallel_size = 2
+            _trainer_config.critic.strategy = "megatron"
+            _trainer_config.critic.megatron.tensor_model_parallel_size = 2
 
         explorer1_config = deepcopy(config)
+        explorer1_config.trainer = deepcopy(trainer_config.trainer)
         explorer1_config.mode = "explore"
         explorer1_config.explorer.name = "explorer1"
         config.cluster.gpu_per_node = 1
@@ -456,6 +515,7 @@ class TestFullyAsyncMode(unittest.TestCase):
             storage_type=StorageType.QUEUE,
         )
         explorer2_config = deepcopy(explorer1_config)
+        explorer2_config.trainer = deepcopy(trainer_config.trainer)
         explorer1_config.check_and_update()
 
         trainer_process = multiprocessing.Process(target=run_trainer, args=(trainer_config,))
@@ -502,12 +562,29 @@ class TestFullyAsyncMode(unittest.TestCase):
         rollout_metrics = parser.metric_list("rollout")
         self.assertEqual(parser.metric_max_step(rollout_metrics[0]), 4)
         # check the checkpoint
-        explorer1_cache = CacheManager(explorer1_config)
+        explorer1_cache = StateManager(
+            path=explorer1_config.checkpoint_job_dir,
+            trainer_name=None,
+            explorer_name="explorer1",
+            config=explorer1_config,
+        )
         cache = explorer1_cache.load_explorer()
         self.assertEqual(cache["latest_iteration"], 4)
-        explorer2_cache = CacheManager(explorer2_config)
+        explorer2_cache = StateManager(
+            path=explorer2_config.checkpoint_job_dir,
+            trainer_name=None,
+            explorer_name="explorer2",
+            config=explorer2_config,
+        )
         cache = explorer2_cache.load_explorer()
         self.assertEqual(cache["latest_iteration"], 4)
+        trainer_cache = StateManager(
+            path=trainer_config.checkpoint_job_dir,
+            trainer_name=trainer_config.trainer.name,
+            config=trainer_config,
+        )
+        cache = trainer_cache.load_trainer()
+        self.assertEqual(cache["latest_iteration"], 8)
         # check the lastest checkpoint
         self.assertEqual(
             get_checkpoint_dir_with_step_num(
@@ -563,10 +640,12 @@ class TestTrainerMIX(BaseTrainerCase):
         self.config.buffer.explorer_input.taskset = get_unittest_dataset_config("gsm8k")
         self.config.synchronizer.sync_interval = 1
         self.config.trainer.save_interval = 1
-        self.config.buffer.trainer_input.sft_warmup_dataset = get_unittest_dataset_config(
-            "sft_for_gsm8k"
-        )
-        self.config.buffer.trainer_input.sft_warmup_dataset.total_epochs = 8  # test this works
+        self.config.buffer.trainer_input.auxiliary_buffers[
+            "sft_dataset"
+        ] = get_unittest_dataset_config("sft_for_gsm8k")
+        self.config.buffer.trainer_input.auxiliary_buffers[
+            "sft_dataset"
+        ].total_epochs = 8  # test this works
         self.config.check_and_update()
         self.config.buffer.trainer_input.experience_buffer.max_read_timeout = 20
         self.config.trainer.trainer_config.trainer.max_actor_ckpt_to_keep = 2
@@ -601,3 +680,43 @@ class TestTrainerMIX(BaseTrainerCase):
 
     def tearDown(self):
         shutil.rmtree(self.config.checkpoint_job_dir)
+
+
+class TestTrainerMultiModal(BaseTrainerCase):
+    @unittest.skip("Require specific vllm/transformers version")
+    def test_trainer(self):
+        """Test both mode with multi-modal data."""
+        self.config.buffer.explorer_input.taskset = get_unittest_dataset_config(
+            "geometry"
+        )  # Total 8 tasks
+        self.config.model.model_path = get_vision_languge_model_path()
+        self.config.algorithm.algorithm_type = "grpo"
+        self.config.algorithm.advantage_fn = "grpo"
+        self.config.algorithm.kl_loss_fn = "none"
+        self.config.algorithm.repeat_times = 4
+        self.config.buffer.batch_size = 4
+        self.config.buffer.total_epochs = 1
+        self.config.trainer.save_interval = 1
+        self.config.cluster.node_num = 1
+        self.config.cluster.gpu_per_node = 4
+        self.config.check_and_update()
+        both(self.config)
+        # check metrics are available
+        parser = TensorBoardParser(os.path.join(self.config.monitor.cache_dir, "tensorboard"))
+        rollout_metrics = parser.metric_list("rollout")
+        self.assertTrue(len(rollout_metrics) > 0)
+        self.assertEqual(parser.metric_max_step(rollout_metrics[0]), 2)
+        actor_metrics = parser.metric_list("actor")
+        self.assertTrue(len(actor_metrics) > 0)
+        self.assertEqual(parser.metric_max_step(actor_metrics[0]), 2)
+        response_metrics = parser.metric_list("response_length")
+        self.assertTrue(len(response_metrics) > 0)
+        self.assertEqual(parser.metric_max_step(response_metrics[0]), 2)
+        ray.shutdown(_exiting_interpreter=True)
+        # check save lastest checkpoint
+        checkpoint_step_2, step_num = get_checkpoint_dir_with_step_num(
+            checkpoint_root_path=self.config.checkpoint_job_dir,
+            trainer_type=self.config.trainer.trainer_type,
+        )
+        self.assertTrue(len(os.listdir(os.path.join(checkpoint_step_2, "actor"))) > 0)
+        self.assertEqual(step_num, 2)

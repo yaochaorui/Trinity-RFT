@@ -24,6 +24,8 @@ class DJConfig(BaseModel):
     target_fields: List[str] = []  # fields in the output dataset
     priority_weights: Dict[str, float] = {}  # weights for priority computing
     top_k: int = -1  # number of samples to select after task pipeline. -1 means all
+    order_method: Literal["keep", "shuffle", "sort", "folding"] = "sort"
+    order_args: Dict = {}
 
     @model_validator(mode="after")
     def check_dj_config(self):
@@ -114,6 +116,8 @@ DIMENSION_STATS_KEYS = {
 
 
 def group_scores(dataset: Dataset) -> Dataset:
+    if Fields.stats not in dataset.features:
+        return dataset
     # for perplexity, normalize them with the max value.
     stats_min_max = {}
     for stats in dataset.features[Fields.stats]:
@@ -165,6 +169,8 @@ def compute_priority_scores(
 
     from data_juicer.utils.constant import Fields
 
+    if Fields.stats not in sample:
+        return sample
     stats = sample[Fields.stats]
     if isinstance(stats, list):
         stats = stats[0]

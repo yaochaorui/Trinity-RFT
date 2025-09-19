@@ -219,7 +219,7 @@ class QueueStorage:
         self.queue = QueueBuffer.get_queue(storage_config, config)
         st_config = deepcopy(storage_config)
         st_config.wrap_in_ray = False
-        if st_config.path is not None:
+        if st_config.path:
             if is_database_url(st_config.path):
                 from trinity.buffer.writer.sql_writer import SQLWriter
 
@@ -252,7 +252,8 @@ class QueueStorage:
         self.ref_count -= 1
         if self.ref_count <= 0:
             await self.queue.close()
-            await self.writer.release()
+            if self.writer is not None:
+                await self.writer.release()
         return self.ref_count
 
     def length(self) -> int:

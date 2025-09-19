@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """Configs for RFT."""
+from __future__ import annotations
+
 import os
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -23,6 +26,11 @@ from trinity.utils.log import get_logger
 logger = get_logger(__name__)
 
 
+def set_if_none(obj, attr, val):
+    if getattr(obj, attr, None) is None:
+        setattr(obj, attr, val)
+
+
 @dataclass
 class FormatConfig:
     """Configuration for data formatting"""
@@ -41,6 +49,8 @@ class FormatConfig:
 
     # for tools
     tools_key: str = "tools"
+    image_key: Optional[str] = None  # used for multi-modal data
+    video_key: Optional[str] = None  # used for multi-modal data
 
     reply_prefix: Optional[str] = None
 
@@ -52,6 +62,12 @@ class FormatConfig:
     chosen_key: str = "chosen"
     rejected_key: str = "rejected"
 
+    # for multi-turn sft
+    enable_concatenated_multi_turn: bool = False
+
+    # for sft / dpo, if None, use model.custom_chat_template
+    chat_template: Optional[str] = None
+
 
 @dataclass
 class GenerationConfig:
@@ -59,6 +75,7 @@ class GenerationConfig:
     top_p: float = 1.0
     top_k: int = -1
     logprobs: int = 0  # vLLM return `logprobs + 1` elements
+    max_tokens: Optional[int] = None  # if None, use model.max_response_tokens
     # repeat each task for `n` times
     # ! DO NOT SET in `buffer.explorer_input.taskset.rollout_args`
     n: int = 1
@@ -73,11 +90,16 @@ class StorageConfig:
     path: Optional[str] = None
     repeat_times: Optional[int] = None
 
+    # For continuing training
+    index: int = 0
+
+    # used for multi-modal data
+    mm_data_kwargs: dict = field(default_factory=dict)
+
     # used for StorageType.FILE
     split: str = "train"
     subset_name: Optional[str] = None
     format: FormatConfig = field(default_factory=FormatConfig)
-    index: int = 0
 
     # used for StorageType.QUEUE
     capacity: int = 10000
@@ -207,11 +229,21 @@ class ModelConfig:
     # source model path
     model_path: str = ""
     critic_model_path: str = ""
-    max_model_len: Optional[int] = None
-    max_prompt_tokens: Optional[int] = None
-    max_response_tokens: Optional[int] = None
-    min_response_tokens: int = 1
+
     custom_chat_template: Optional[str] = None
+
+    # the total number of tokens the model can handle
+    max_model_len: Optional[int] = None
+
+    # Note: the following fields are only for the `chat`/`generate` methods in `InferenceModel`
+    # if you are using openai API, please set them when calling the API.
+
+    # the maximum number of tokens for the prompt
+    max_prompt_tokens: Optional[int] = None
+    # the maximum number of tokens for the response
+    max_response_tokens: Optional[int] = None
+    # the minimum number of tokens for the response
+    min_response_tokens: int = 1
 
 
 @dataclass
@@ -219,7 +251,6 @@ class InferenceModelConfig:
     # ! DO NOT SET in explorer.rollout_model, automatically set from config.model.model_path
     model_path: str = ""
 
-    # support `vllm` or `vllm_async`,
     engine_type: str = "vllm_async"
     engine_num: int = 1
     tensor_parallel_size: int = 1
@@ -297,10 +328,6 @@ class AlgorithmConfig:
     # If not set, use entropy_loss_fn.default_args()
     entropy_loss_fn_args: Optional[dict] = None
 
-    # used for SFT warmup
-    # TODO: move this to SFT warmup
-    use_token_level_loss: bool = True
-
 
 @dataclass
 class ClusterConfig:
@@ -325,14 +352,20 @@ class ExplorerInput:
     reply_prefix: Optional[str] = None
 
 
-@Experimental
 @dataclass
 class TrainerInput:
     """Config for trainer input."""
 
+    # The main experience buffer to be used in trainer
+    # Commonly, it is also the output buffer of the Explorer
     experience_buffer: Optional[StorageConfig] = None
+
+    # Some auxiliary buffers to facilitate training (e.g., data mixing)
+    auxiliary_buffers: Dict[str, StorageConfig] = field(default_factory=dict)
+
+    # ! Deprecated, keep for backward compatibility, do not use it in new code
     sft_warmup_dataset: Optional[StorageConfig] = None
-    sft_warmup_steps: int = 0
+    sft_warmup_steps: Optional[int] = None
 
 
 @dataclass
@@ -372,7 +405,7 @@ class ExplorerConfig:
         int
     ] = None  # the number of time to repeat each task in a single workflow runner (for GRPO-like algorithms)
 
-    runner_num: Optional[int] = None  # deprecated
+    runner_num: Optional[int] = None  # ! Deprecated
 
     # for inference models
     # for rollout model
@@ -394,6 +427,9 @@ class TrainerConfig:
     trainer_type: str = "verl"
     save_interval: int = 0
     enable_preview: bool = True  # enable rollout preview in wandb
+    total_steps: Optional[
+        int
+    ] = None  # total training steps, training stops when reaching this step, None means no limit
 
     # trainer configs
     actor_grad_clip: Optional[float] = None
@@ -474,6 +510,19 @@ class LogConfig:
 
 
 @dataclass
+class StageConfig:
+    """Configs for a stage."""
+
+    stage_name: str
+    mode: Optional[str] = None
+    algorithm: Optional[AlgorithmConfig] = None
+    buffer: Optional[BufferConfig] = None
+    data_processor: Optional[DataProcessorConfig] = None
+    explorer: Optional[ExplorerConfig] = None
+    trainer: Optional[TrainerConfig] = None
+
+
+@dataclass
 class Config:
     """Global Configuration"""
 
@@ -502,13 +551,27 @@ class Config:
     service: ServiceConfig = field(default_factory=ServiceConfig)
     log: LogConfig = field(default_factory=LogConfig)
 
+    # configurations for different training stages
+    stages: List[StageConfig] = field(default_factory=list)
+
     def save(self, config_path: str) -> None:
         """Save config to file."""
         with open(config_path, "w", encoding="utf-8") as f:
             OmegaConf.save(self, f)
 
     def _check_deprecated(self) -> None:
-        pass
+        if self.buffer.trainer_input.sft_warmup_steps is not None:
+            logger.warning(
+                "`buffer.trainer_input.sft_warmup_steps` is deprecated, SFT warmup related settings are moved to `stages`."
+            )
+        if self.buffer.trainer_input.sft_warmup_dataset is not None:
+            logger.warning(
+                "`buffer.trainer_input.sft_warmup_dataset` is deprecated, SFT warmup related settings are moved to `stages`."
+            )
+        if self.explorer.runner_num is not None:
+            logger.warning(
+                "`explorer.runner_num` is deprecated, please use `explorer.runner_per_model` instead."
+            )
 
     def _check_interval(self) -> None:
         assert self.synchronizer.sync_interval > 0
@@ -526,107 +589,84 @@ class Config:
     def _check_buffer(self) -> None:  # noqa: C901
         # TODO: split this function into different buffer read/writer
         # check explorer_input
-        if self.mode != "train" and not self.buffer.explorer_input.taskset.path:
+        trainer_input = self.buffer.trainer_input
+        experience_buffer = trainer_input.experience_buffer
+        explorer_input = self.buffer.explorer_input
+        taskset = explorer_input.taskset
+
+        if self.mode != "train" and not taskset.path:
             raise ValueError(
                 "`buffer.explorer_input.taskset.path` is required, please set it to the path of the taskset."
             )
-        if not self.buffer.explorer_input.taskset.name:
-            self.buffer.explorer_input.taskset.name = "taskset"
-        if (
-            self.buffer.explorer_input.taskset.repeat_times is None
-            or self.buffer.explorer_input.taskset.repeat_times != self.algorithm.repeat_times
-        ):
-            self.buffer.explorer_input.taskset.repeat_times = self.algorithm.repeat_times
+        if not taskset.name:
+            taskset.name = "taskset"
+        if taskset.repeat_times is None or taskset.repeat_times != self.algorithm.repeat_times:
+            taskset.repeat_times = self.algorithm.repeat_times
             logger.info(
                 "`buffer.explorer_input.taskset.repeat_times` is set to `algorithm.repeat_times`"
                 f" (={self.algorithm.repeat_times})."
             )
         if self.mode == "train":
             assert (
-                self.buffer.trainer_input.experience_buffer is not None
+                experience_buffer is not None
             ), "`buffer.trainer_input.experience_buffer` is required when `mode` is `train`."
-            self.buffer.trainer_input.experience_buffer.total_epochs = self.buffer.total_epochs
-            self.buffer.trainer_input.experience_buffer.total_steps = self.buffer.total_steps
+            experience_buffer.total_epochs = self.buffer.total_epochs
+            experience_buffer.total_steps = self.buffer.total_steps
         else:
-            self.buffer.explorer_input.taskset.is_eval = False
-            self.buffer.explorer_input.taskset.total_epochs = self.buffer.total_epochs
-            self.buffer.explorer_input.taskset.total_steps = self.buffer.total_steps
-        if self.buffer.explorer_input.taskset.default_workflow_type is None:
-            self.buffer.explorer_input.taskset.default_workflow_type = (
-                self.buffer.explorer_input.default_workflow_type
-            )
-        if self.buffer.explorer_input.taskset.default_eval_workflow_type is None:
-            self.buffer.explorer_input.taskset.default_eval_workflow_type = (
-                self.buffer.explorer_input.default_eval_workflow_type
-            )
-        if self.buffer.explorer_input.taskset.default_reward_fn_type is None:
-            self.buffer.explorer_input.taskset.default_reward_fn_type = (
-                self.buffer.explorer_input.default_reward_fn_type
-            )
-        if self.buffer.explorer_input.taskset.format.system_prompt is None:
-            self.buffer.explorer_input.taskset.format.system_prompt = (
-                self.buffer.explorer_input.system_prompt
-            )
-        if self.buffer.explorer_input.taskset.format.reply_prefix is None:
-            self.buffer.explorer_input.taskset.format.reply_prefix = (
-                self.buffer.explorer_input.reply_prefix
-            )
-        if self.buffer.explorer_input.taskset.ray_namespace is None:
-            self.buffer.explorer_input.taskset.ray_namespace = self.ray_namespace
+            taskset.is_eval = False
+            taskset.total_epochs = self.buffer.total_epochs
+            taskset.total_steps = self.buffer.total_steps
+
+        set_if_none(taskset, "default_workflow_type", explorer_input.default_workflow_type)
+        set_if_none(
+            taskset, "default_eval_workflow_type", explorer_input.default_eval_workflow_type
+        )
+        set_if_none(taskset, "default_reward_fn_type", explorer_input.default_reward_fn_type)
+        set_if_none(taskset.format, "system_prompt", explorer_input.system_prompt)
+        set_if_none(taskset.format, "reply_prefix", explorer_input.reply_prefix)
+        set_if_none(taskset, "ray_namespace", self.ray_namespace)
+        set_if_none(taskset.rollout_args, "max_tokens", self.model.max_response_tokens)
 
         remained_tasksets = []
-        for idx, dataset in enumerate(self.buffer.explorer_input.eval_tasksets):
+        for idx, dataset in enumerate(explorer_input.eval_tasksets):
             if not dataset.path:
                 logger.warning(f"Eval dataset [{dataset}]'s path is not configured. Skip.")
                 continue
             dataset.is_eval = True
             if not dataset.name:
                 dataset.name = f"eval_taskset_{idx}"
-            if dataset.repeat_times is None:
-                dataset.repeat_times = 1
-            if dataset.default_workflow_type is None:
-                dataset.default_workflow_type = self.buffer.explorer_input.default_workflow_type
-            if dataset.default_eval_workflow_type is None:
-                dataset.default_eval_workflow_type = (
-                    self.buffer.explorer_input.default_eval_workflow_type
-                )
-            if dataset.default_reward_fn_type is None:
-                dataset.default_reward_fn_type = self.buffer.explorer_input.default_reward_fn_type
-            if dataset.format.system_prompt is None:
-                dataset.format.system_prompt = self.buffer.explorer_input.system_prompt
-            if dataset.format.reply_prefix is None:
-                dataset.format.reply_prefix = self.buffer.explorer_input.reply_prefix
-            if dataset.ray_namespace is None:
-                dataset.ray_namespace = self.ray_namespace
+            set_if_none(dataset, "repeat_times", 1)
+            set_if_none(dataset, "default_workflow_type", explorer_input.default_workflow_type)
+            set_if_none(
+                dataset, "default_eval_workflow_type", explorer_input.default_eval_workflow_type
+            )
+            set_if_none(dataset, "default_reward_fn_type", explorer_input.default_reward_fn_type)
+            set_if_none(dataset.format, "system_prompt", explorer_input.system_prompt)
+            set_if_none(dataset.format, "reply_prefix", explorer_input.reply_prefix)
+            set_if_none(dataset, "ray_namespace", self.ray_namespace)
+            set_if_none(dataset.rollout_args, "max_tokens", self.model.max_response_tokens)
             remained_tasksets.append(dataset)
-        self.buffer.explorer_input.eval_tasksets = remained_tasksets
+        explorer_input.eval_tasksets = remained_tasksets
 
         # check trainer_input.experience_buffer
-        if self.buffer.trainer_input.experience_buffer is None:
-            self.buffer.trainer_input.experience_buffer = StorageConfig(
+        if experience_buffer is None:
+            experience_buffer = trainer_input.experience_buffer = StorageConfig(
                 name="experience_buffer",
                 storage_type=StorageType.QUEUE,
             )
-            logger.info(
-                f"Auto set `buffer.trainer_input.experience_buffer` to {self.buffer.trainer_input.experience_buffer}"
-            )
-        elif (
-            self.buffer.trainer_input.experience_buffer.storage_type is StorageType.FILE
-            and self.mode == "both"
-        ):
+            logger.info(f"Auto set `buffer.trainer_input.experience_buffer` to {experience_buffer}")
+        elif experience_buffer.storage_type is StorageType.FILE and self.mode == "both":
             logger.warning(
                 "`FILE` storage is not supported to use as experience_buffer in `both` mode, use `QUEUE` instead."
             )
-            self.buffer.trainer_input.experience_buffer.storage_type = StorageType.QUEUE
+            experience_buffer.storage_type = StorageType.QUEUE
 
-        if self.buffer.trainer_input.experience_buffer is not None:
-            from trinity.algorithm.algorithm import ALGORITHM_TYPE
+        from trinity.algorithm.algorithm import ALGORITHM_TYPE
 
-            self.buffer.trainer_input.experience_buffer.schema_type = ALGORITHM_TYPE.get(
-                self.algorithm.algorithm_type
-            ).schema
-            if self.buffer.trainer_input.experience_buffer.ray_namespace is None:
-                self.buffer.trainer_input.experience_buffer.ray_namespace = self.ray_namespace
+        experience_buffer.schema_type = ALGORITHM_TYPE.get(self.algorithm.algorithm_type).schema
+
+        set_if_none(experience_buffer, "ray_namespace", self.ray_namespace)
+        set_if_none(experience_buffer.format, "chat_template", self.model.custom_chat_template)
 
         # create buffer.cache_dir at <checkpoint_root_dir>/<project>/<name>/buffer
         self.buffer.cache_dir = os.path.abspath(os.path.join(self.checkpoint_job_dir, "buffer"))
@@ -638,42 +678,36 @@ class Config:
                 f"your checkpoint directory: {self.checkpoint_job_dir}"
             )
 
-        # check trainer_input.sft_warmup_dataset
-        if (
-            self.buffer.trainer_input.sft_warmup_steps > 0
-            and self.buffer.trainer_input.sft_warmup_dataset is None
-        ):
-            raise ValueError(
-                "`buffer.trainer_input.sft_warmup_dataset` is required when `buffer.trainer_input.sft_warmup_steps` > 0"
-            )
-        if self.buffer.trainer_input.sft_warmup_dataset is not None:
-            self.buffer.trainer_input.sft_warmup_dataset.schema_type = "sft"
-            self.buffer.trainer_input.sft_warmup_dataset.total_steps = (
-                self.buffer.trainer_input.sft_warmup_steps
-            )
-            if self.buffer.trainer_input.sft_warmup_dataset.ray_namespace is None:
-                self.buffer.trainer_input.sft_warmup_dataset.ray_namespace = self.ray_namespace
-
         # check input/output buffers in pipelines
-        if self.data_processor.experience_pipeline is not None:
-            if (
-                self.data_processor.experience_pipeline.save_input
-                and self.data_processor.experience_pipeline.input_save_path is None
-            ):
-                self.data_processor.experience_pipeline.input_save_path = os.path.join(
+        experience_pipeline = self.data_processor.experience_pipeline
+        if experience_pipeline is not None:
+            if experience_pipeline.save_input and experience_pipeline.input_save_path is None:
+                experience_pipeline.input_save_path = os.path.join(
                     self.buffer.cache_dir, "explorer_output.jsonl"
                 )
                 logger.info(
-                    f"Auto set `data_processor.experience_pipeline.input_save_path` to {self.data_processor.experience_pipeline.input_save_path}"
+                    f"Auto set `data_processor.experience_pipeline.input_save_path` to {experience_pipeline.input_save_path}"
                 )
-        if self.data_processor.task_pipeline is not None:
-            if self.data_processor.task_pipeline.output is None:
-                self.data_processor.task_pipeline.output = self.buffer.explorer_input.taskset
-            if self.data_processor.task_pipeline.output.path and os.path.exists(
-                self.data_processor.task_pipeline.output.path
-            ):
+
+        task_pipeline = self.data_processor.task_pipeline
+        if task_pipeline is not None:
+            if task_pipeline.output is None:
+                if taskset.path is not None:
+                    task_pipeline.output = taskset
+                elif (
+                    experience_buffer.schema_type in {"dpo", "sft"}
+                    and experience_buffer.path is not None
+                ):
+                    task_pipeline.output = experience_buffer
+                else:
+                    raise ValueError(
+                        "`data_processor.task_pipeline.output` is required when both "
+                        "`buffer.explorer_input.taskset.path` and `buffer.trainer_input.experience_buffer.path` are "
+                        "None"
+                    )
+            if task_pipeline.output.path and os.path.exists(task_pipeline.output.path):
                 raise ValueError(
-                    f"Task pipeline output path {self.data_processor.task_pipeline.output.path} already exists.\n"
+                    f"Task pipeline output path {task_pipeline.output.path} already exists.\n"
                     "Please choose a different output path to avoid overwriting."
                 )
 
@@ -730,15 +764,13 @@ class Config:
         }
         default_config.update(algorithm.default_config())
         for key, value in default_config.items():
-            if getattr(self.algorithm, key, None) is None:
-                setattr(self.algorithm, key, value)
+            set_if_none(self.algorithm, key, value)
 
         def check_and_set(name, registry, args_attr):
             fn_cls = registry.get(getattr(self.algorithm, name))
             if fn_cls is None:
                 raise ValueError(f"Invalid {name}: {getattr(self.algorithm, name)}")
-            if getattr(self.algorithm, args_attr) is None:
-                setattr(self.algorithm, args_attr, fn_cls.default_args())
+            set_if_none(self.algorithm, args_attr, fn_cls.default_args())
             return fn_cls
 
         check_and_set("sample_strategy", SAMPLE_STRATEGY, "sample_strategy_args")
@@ -748,7 +780,96 @@ class Config:
         check_and_set("kl_penalty_fn", KL_FN, "kl_penalty_fn_args")
         check_and_set("entropy_loss_fn", ENTROPY_LOSS_FN, "entropy_loss_fn_args")
 
-    def check_and_update(self) -> None:  # noqa: C901
+    def _check_model(self) -> None:
+        model = self.model
+        if not model.critic_model_path:
+            model.critic_model_path = model.model_path
+
+        # check max_model_len, max_prompt_tokens, max_response_tokens
+
+        # if all three are set, check if they are valid
+        if (
+            model.max_model_len is not None
+            and model.max_prompt_tokens is not None
+            and model.max_response_tokens is not None
+        ):
+            if model.max_prompt_tokens + model.max_response_tokens > model.max_model_len:
+                raise ValueError(
+                    f"`max_prompt_tokens` + `max_response_tokens` ({model.max_prompt_tokens} + {model.max_response_tokens}) "
+                    f"exceeds `max_model_len` ({model.max_model_len}). Please adjust them accordingly."
+                )
+
+        # check max_model_len first
+        if model.max_model_len is None:
+            if model.max_prompt_tokens is not None and model.max_response_tokens is not None:
+                model.max_model_len = model.max_prompt_tokens + model.max_response_tokens
+                logger.warning(
+                    f"`max_model_len` is set to {model.max_model_len} from `max_prompt_tokens` and `max_response_tokens`."
+                )
+            else:
+                from transformers import AutoConfig, AutoTokenizer
+                from transformers.tokenization_utils_base import LARGE_INTEGER
+
+                tokenizer = AutoTokenizer.from_pretrained(model.model_path)
+                config = AutoConfig.from_pretrained(model.model_path)
+                max_model_len = min(
+                    getattr(tokenizer, "model_max_length", LARGE_INTEGER),
+                    getattr(config, "max_position_embeddings", LARGE_INTEGER),
+                )
+                if max_model_len >= LARGE_INTEGER:
+                    max_model_len = MAX_MODEL_LEN
+                    logger.warning(
+                        f"Failed to get `max_model_len` from model {model.model_path}, use {MAX_MODEL_LEN} instead."
+                    )
+                model.max_model_len = max_model_len
+
+        # both max_prompt_tokens and max_response_tokens are None
+        if model.max_prompt_tokens is None and model.max_response_tokens is None:
+            # default to max_model_len / 2
+            model.max_prompt_tokens = model.max_model_len // 2
+            model.max_response_tokens = model.max_model_len - model.max_prompt_tokens
+            logger.warning(
+                f"`max_prompt_tokens` and `max_response_tokens` are not set, set to {model.max_prompt_tokens} and {model.max_response_tokens} respectively."
+            )
+
+        # only max_prompt_tokens is None
+        if model.max_prompt_tokens is None and model.max_response_tokens is not None:
+            model.max_response_tokens = min(model.max_response_tokens, model.max_model_len - 1)
+            model.max_prompt_tokens = model.max_model_len - model.max_response_tokens
+            logger.warning(
+                f"`max_prompt_tokens` is set to {model.max_prompt_tokens}, `max_response_tokens` is set to {model.max_response_tokens}."
+            )
+
+        # only max_response_tokens is None
+        if model.max_response_tokens is None and model.max_prompt_tokens is not None:
+            model.max_prompt_tokens = min(model.max_prompt_tokens, model.max_model_len - 1)
+            model.max_response_tokens = model.max_model_len - model.max_prompt_tokens
+            logger.warning(
+                f"`max_response_tokens` is set to {model.max_response_tokens}, `max_prompt_tokens` is set to {model.max_prompt_tokens}."
+            )
+
+        if model.min_response_tokens >= model.max_response_tokens:  # type: ignore [operator]
+            model.min_response_tokens = max(model.max_response_tokens - 1, 0)  # type: ignore [operator]
+            logger.warning(f"`min_response_tokens` is set to {model.min_response_tokens}.")
+
+    def __iter__(self):
+        """Iterate over configs with each stage applied in order.
+
+        Yields:
+            Config: The config after applying each stage.
+        """
+        for stage in self.stages:
+            new_config = deepcopy(self)
+            for field_name in stage.__dataclass_fields__:
+                stage_value = getattr(stage, field_name)
+                if stage_value is not None and hasattr(new_config, field_name):
+                    setattr(new_config, field_name, stage_value)
+            if stage.stage_name:
+                new_config.name = f"{self.name}/{stage.stage_name}"
+            new_config.stages = []
+            yield new_config
+
+    def check_and_update(self) -> Config:  # noqa: C901
         """Check and update the config."""
         self._check_deprecated()
 
@@ -781,47 +902,23 @@ class Config:
             logger.warning(f"Experiment [{ori_name}] already exists, renamed as {self.name}.")
         os.makedirs(self.checkpoint_job_dir, exist_ok=True)
 
-        # check and update model path
-        if self.explorer is not None:
-            self.explorer.rollout_model.model_path = self.model.model_path
-        if not self.model.critic_model_path:
-            self.model.critic_model_path = self.model.model_path
+        # check model
+        self._check_model()
 
         # check explorer
-        if self.model.max_model_len is None:
-            from transformers import AutoConfig, AutoTokenizer
-            from transformers.tokenization_utils_base import LARGE_INTEGER
-
-            tokenizer = AutoTokenizer.from_pretrained(self.model.model_path)
-            config = AutoConfig.from_pretrained(self.model.model_path)
-            max_model_len = min(
-                getattr(tokenizer, "model_max_length", LARGE_INTEGER),
-                getattr(config, "max_position_embeddings", LARGE_INTEGER),
-            )
-            if max_model_len >= LARGE_INTEGER:
-                max_model_len = MAX_MODEL_LEN
-                logger.warning(
-                    f"Failed to get `max_model_len` from model {self.model.model_path}, use {MAX_MODEL_LEN} instead."
-                )
-            self.model.max_model_len = max_model_len
-        if (
-            self.model.max_prompt_tokens is None
-            or self.model.max_prompt_tokens >= self.model.max_model_len
-        ):
-            self.model.max_prompt_tokens = self.model.max_model_len - 1
-            logger.warning(f"`max_prompt_tokens` is set to {self.model.max_prompt_tokens}.")
-        if (
-            self.model.max_response_tokens is None
-            or self.model.max_response_tokens > self.model.max_model_len
-        ):
-            self.model.max_response_tokens = self.model.max_model_len
-            logger.warning(f"`max_response_tokens` is set to {self.model.max_response_tokens}.")
-        if self.explorer.rollout_model.max_model_len is None:
+        if self.explorer is not None:
+            self.explorer.rollout_model.model_path = self.model.model_path
             self.explorer.rollout_model.max_model_len = self.model.max_model_len
-        if self.explorer.rollout_model.max_prompt_tokens is None:
             self.explorer.rollout_model.max_prompt_tokens = self.model.max_prompt_tokens
-        if self.explorer.rollout_model.max_response_tokens is None:
             self.explorer.rollout_model.max_response_tokens = self.model.max_response_tokens
+            self.explorer.rollout_model.min_response_tokens = self.model.min_response_tokens
+            for aux_model in self.explorer.auxiliary_models:
+                if not aux_model.model_path:
+                    raise ValueError("auxiliary model's model_path is required.")
+                set_if_none(aux_model, "max_model_len", self.model.max_model_len)
+                set_if_none(aux_model, "max_prompt_tokens", self.model.max_prompt_tokens)
+                set_if_none(aux_model, "max_response_tokens", self.model.max_response_tokens)
+                set_if_none(aux_model, "min_response_tokens", self.model.min_response_tokens)
 
         # check synchronizer
         self.synchronizer.ray_namespace = self.ray_namespace
@@ -846,8 +943,7 @@ class Config:
         monitor_cls = MONITOR.get(self.monitor.monitor_type)
         if monitor_cls is None:
             raise ValueError(f"Invalid monitor type: {self.monitor.monitor_type}")
-        if self.monitor.monitor_args is None:
-            self.monitor.monitor_args = monitor_cls.default_args()
+        set_if_none(self.monitor, "monitor_args", monitor_cls.default_args())
         # create a job dir in <checkpoint_root_dir>/<project>/<name>/monitor
         self.monitor.cache_dir = os.path.join(self.checkpoint_job_dir, "monitor")
         try:
@@ -861,7 +957,7 @@ class Config:
         # check buffer
         self._check_buffer()
         # check and update trainer
-        if self.mode in {"both", "train"}:
+        if self.mode in ["train", "both"]:
             if self.trainer.trainer_type == "verl":
                 if self.trainer.trainer_config:
                     from trinity.common.verl_config import veRLConfig
@@ -883,8 +979,6 @@ class Config:
             else:
                 raise ValueError(f"Invalid trainer type: {self.trainer_type}")
             self.trainer.trainer_config.synchronize_config(self)
-        else:
-            self.trainer.trainer_config = None
 
         # check service
         if self.service.data_juicer is not None:
@@ -894,6 +988,7 @@ class Config:
 
         # check log
         self.log.save_dir = os.path.join(self.checkpoint_job_dir, "log")
+        return self
 
     def flatten(self) -> Dict[str, Any]:
         """Flatten the config into a single-level dict with dot-separated keys for nested fields."""

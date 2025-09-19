@@ -1,3 +1,4 @@
+(Configuration Guide)=
 # Configuration Guide
 
 This section provides a detailed description of the configuration files used in **Trinity-RFT**.
@@ -10,7 +11,7 @@ The configuration for **Trinity-RFT** is defined in a `YAML` file and organized 
 project: Trinity-RFT
 name: example
 mode: both
-checkpoint_root_dir: /PATH/TO/CHECKPOINT
+checkpoint_root_dir: ${oc.env:TRINITY_CHECKPOINT_ROOT_DIR,./checkpoints}
 continue_from_checkpoint: true
 
 algorithm:
@@ -46,6 +47,10 @@ data_processor:
 log:
   # Ray actor logging
   ...
+
+stages:
+  # Stages configuration
+  ...
 ```
 
 Each of these sections will be explained in detail below. For additional details about specific parameters not covered here, please refer to the [source code](https://github.com/modelscope/Trinity-RFT/blob/main/trinity/common/config.py).
@@ -66,7 +71,7 @@ These are general settings that apply to the entire experiment.
 project: Trinity-RFT
 name: example
 mode: both
-checkpoint_root_dir: ${oc.env:CHECKPOINT_ROOT_DIR}   # CHECKPOINT_ROOT_DIR is an environment variable set in advance
+checkpoint_root_dir: ${oc.env:TRINITY_CHECKPOINT_ROOT_DIR,./checkpoints}   # TRINITY_CHECKPOINT_ROOT_DIR is an environment variable set in advance
 ```
 
 - `project`: The name of the project.
@@ -147,14 +152,22 @@ Defines the model paths and token limits.
 model:
   model_path: ${oc.env:MODEL_PATH}  # MODEL_PATH is an environment variable set in advance
   critic_model_path: ${model.model_path}  # use the value of model.model_path
-  max_response_tokens: 16384
   max_model_len: 20480
+  max_prompt_tokens: 4096
+  max_response_tokens: 16384
+  min_response_tokens: 1
 ```
 
 - `model_path`: Path to the model being trained.
 - `critic_model_path`: Optional path to a separate critic model. If empty, defaults to `model_path`.
-- `max_response_tokens`: Maximum number of tokens allowed in generated responses.
-- `max_model_len`: Maximum number of tokens in a sequence.
+- `max_model_len`: Maximum number of tokens in a sequence. It is recommended to set this value manually. If not set, it will be inferred from the model configuration.
+- `max_response_tokens`: Maximum number of tokens allowed in generated responses. Only for `chat` and `generate` methods in `InferenceModel`.
+- `max_prompt_tokens`: Maximum number of tokens allowed in prompts. Only for `chat` and `generate` methods in `InferenceModel`.
+- `min_response_tokens`: Minimum number of tokens allowed in generated responses. Only for `chat` and `generate` methods in `InferenceModel`. Default is `1`. It must be less than `max_response_tokens`.
+
+```{tip}
+If you are using the openai API provided by Explorer, only `max_model_len` will take effect, and the value of `max_response_tokens`, `max_prompt_tokens`, and `min_response_tokens` will be ignored. When `max_tokens` is not independently specified, each API call will generate up to `max_model_len - prompt_length` tokens. Therefore, please ensure that the prompt length is less than `max_model_len` when using the API.
+```
 
 ---
 
@@ -191,8 +204,11 @@ buffer:
   trainer_input:
     experience_buffer:
       ...
-    sft_warmup_dataset:
-      ...
+    auxiliary_buffers:
+      buffer_1:
+        ...
+      buffer_2:
+        ...
 
   default_workflow_type: 'math_workflow'
   default_reward_fn_type: 'countdown_reward'
@@ -209,12 +225,11 @@ Defines the dataset(s) used by the explorer for training and evaluation.
 
 ```yaml
 buffer:
-  ...
   explorer_input:
     taskset:
       name: countdown_train
       storage_type: file
-      path: /PATH/TO/DATA
+      path: ${oc.env:TRINITY_TASKSET_PATH}
       split: train
       format:
         prompt_key: 'question'
@@ -227,16 +242,18 @@ buffer:
     eval_tasksets:
     - name: countdown_eval
       storage_type: file
-      path: /PATH/TO/DATA
+      path: ${oc.env:TRINITY_TASKSET_PATH}
       split: test
       repeat_times: 1
       format:
+        prompt_type: `plaintext`
         prompt_key: 'question'
         response_key: 'answer'
       rollout_args:
         temperature: 0.1
       default_workflow_type: 'math_workflow'
       default_reward_fn_type: 'countdown_reward'
+    ...
 ```
 
 - `buffer.explorer_input.taskset`: Task dataset used for training exploration policies.
@@ -256,9 +273,6 @@ The configuration for each task dataset is defined as follows:
 - `subset_name`: The subset name of the task dataset. Default is `None`.
 - `split`: The split of the task dataset. Default is `train`.
 - `repeat_times`: The number of rollouts generated for a task. If not set, it will be automatically set to `algorithm.repeat_times` for `taskset`, and `1` for `eval_tasksets`.
-- `format`: Defines keys for prompts and responses in the dataset.
-  - `prompt_key`: Specifies which column in the dataset contains the prompt data.
-  - `response_key`: Specifies which column in the dataset contains the response data.
 - `rollout_args`: The parameters for rollout.
   - `temperature`: The temperature for sampling.
 - `default_workflow_type`: Type of workflow logic applied to this dataset. If not specified, the `buffer.default_workflow_type` is used.
@@ -267,7 +281,7 @@ The configuration for each task dataset is defined as follows:
 
 ### Trainer Input
 
-Defines the experience buffer and optional SFT warm-up dataset.
+Defines the experience buffer and optional auxiliary datasets used by the trainer.
 
 ```yaml
 buffer:
@@ -277,16 +291,18 @@ buffer:
       name: countdown_buffer
       storage_type: queue
       path: sqlite:///countdown_buffer.db
+      max_read_timeout: 1800
 
-    sft_warmup_dataset:
-      name: warmup_data
-      storage_type: file
-      path: /PATH/TO/WARMUP_DATA
-      format:
-        prompt_key: 'question'
-        response_key: 'answer'
-
-    sft_warmup_steps: 0
+    auxiliary_buffers:
+      sft_dataset:
+        name: sft_dataset
+        storage_type: file
+        path: ${oc.env:TRINITY_SFT_DATASET_PATH}
+        format:
+          prompt_key: 'question'
+          response_key: 'answer'
+      other_buffer:
+        ...
 ```
 
 - `experience_buffer`: It is the input of Trainer and also the output of Explorer. This field is required even in explore mode.
@@ -299,11 +315,24 @@ buffer:
     - For `queue` storage type, this field is optional. You can specify a SQLite database or JSON file path here to back up the queue data.
     - For `file` storage type, the path points to the directory containing the dataset files.
     - For `sql` storage type, the path points to the SQLite database file.
+  - `format`: Defines keys for prompts and responses in the dataset.
+    - `prompt_type`: Specifies the type of prompts in the dataset. We support `plaintext`, `messages` for now.
+      - `plaintext`: The prompt is in string format.
+      - `messages`: The prompt is organized as a message list.
+    - `prompt_key`: Specifies which column in the dataset contains the user prompt data. Only for `plaintext`.
+    - `response_key`: Specifies which column in the dataset contains the response data. Only for `plaintext`.
+    - `system_prompt_key`: Specifies which column in the dataset contains the system prompt data. Only for `plaintext`.
+    - `system_prompt`: Specifies the system prompt in string format. It has lower priority than `system_prompt_key`. Only for `plaintext`.
+    - `messages_key`: Specifies which column in the dataset contains the messages data. Only for `messages`.
+    - `tools_key`: Specifies which column in the dataset contains the tools data. Support both `plaintext` and `messages`, but the tool data should be organized as a list of dict.
+    - `chosen_key`: Specifies which column in the dataset contains the DPO chosen data. Support both `plaintext` and `messages`, and the data type should be consistent with the prompt type.
+    - `rejected_key`: Similar to `chosen_key`, but it specifies which column in the dataset contains the DPO rejected data.
+    - `enable_concatenated_multi_turn`: Enable concatenated multi-turn SFT data preprocess. Only for `messages` and only take effect with SFT algorithm.
+    - `chat_template`: Specifies the chat template in string format. If not provided, use `model.custom_chat_template`.
   - `max_read_timeout`: The maximum waiting time (in seconds) to read new experience data. If exceeded, an incomplete batch will be returned directly. Only take effect when `storage_type` is `queue`. Default is 1800 seconds (30 minutes).
   - `use_priority_queue`: Only take effect when `storage_type` is `queue`. If set to `True`, the queue will be a priority queue, which allows for prioritizing certain experiences over others. Default is `False`.
   - `reuse_cooldown_time`: Only take effect when `storage_type` is `queue` and `use_priority_queue` is `True`. If set, it specifies the cooldown time (in seconds) for reusing experiences. If not specified, the default value is `None`, meaning experiences can not be reused.
-- `sft_warmup_dataset`: Optional dataset used for pre-training (SFT warmup).
-- `sft_warmup_steps`: Number of steps to use SFT warm-up before RL begins.
+- `auxiliary_buffers`: Optional buffers used for trainer. It is a dictionary where each key is the buffer name and the value is the buffer configuration. Each buffer configuration is similar to the `experience_buffer`.
 
 ---
 
@@ -324,7 +353,7 @@ explorer:
     tensor_parallel_size: 1
     enable_history: False
   auxiliary_models:
-  - model_path: /PATH/TO/MODEL
+  - model_path: Qwen/Qwen2.5-7B-Instruct
     tensor_parallel_size: 1
   eval_interval: 100
   eval_on_startup: True
@@ -342,13 +371,12 @@ explorer:
 - `auxiliary_models`: Additional models used for custom workflows.
 - `eval_interval`: Interval (in steps) for evaluating the model.
 - `eval_on_startup`: Whether to evaluate the model on startup. More precisely, at step 0 with the original model, so it will not be triggered when restarting.
-- `runner_num`: (*Deprecated*) Number of parallel workflow runners.
 
 ---
 
 ## Synchronizer Configuration
 
-Controls how model weights are synchronized between trainer and explorer.
+Controls how model weights are synchronized between trainer and explorer. Please refer to {ref}`Synchronizer in Trinity-RFT <Synchronizer>` for more details.
 
 ```yaml
 synchronizer:
@@ -376,15 +404,17 @@ trainer:
   name: trainer
   trainer_type: 'verl'
   save_interval: 100
-  trainer_config_path: 'examples/ppo_countdown/train_countdown.yaml'
+  total_steps: 1000
   trainer_config: null
+  trainer_config_path: ''
 ```
 
 - `name`: Name of the trainer. This name will be used as the Ray actor's name, so it must be unique.
 - `trainer_type`: Trainer backend implementation. Currently only supports `verl`.
 - `save_interval`: Frequency (in steps) at which to save model checkpoints.
-- `trainer_config_path`: The path to the trainer configuration file.
-- `trainer_config`: The trainer configuration provided inline. Only one of `trainer_config_path` and `trainer_config` should be specified.
+- `total_steps`: Total number of training steps.
+- `trainer_config`: The trainer configuration provided inline.
+- `trainer_config_path`: The path to the trainer configuration file. Only one of `trainer_config_path` and `trainer_config` should be specified.
 
 ---
 
@@ -413,8 +443,6 @@ Configures the task / experience pipeline, please refer to {ref}`Data Processing
 ```yaml
 data_processor:
   task_pipeline:
-  # task pipeline related
-  task_pipeline:
     num_process: 32
     operators:
       - name: "llm_difficulty_score_filter"
@@ -424,7 +452,7 @@ data_processor:
           input_keys: ["question", "answer"]
           field_names: ["Question", "Answer"]
     inputs:  # the output will be set to the explorer input automatically
-      - /PATH/TO/GSM8K/DATA/FILE
+      - ${oc.env:TRINITY_TASKSET_PATH}
     target_fields: ["question", "answer"]
   experience_pipeline:
     operators:
@@ -453,6 +481,35 @@ log:
 
 - `level`: The logging level (supports `DEBUG`, `INFO`, `WARNING`, `ERROR`).
 - `group_by_node`: Whether to group logs by node IP. If set to `True`, an actor's logs will be save to `<checkpoint_root_dir>/<project>/<name>/log/<node_ip>/<actor_name>.log`, otherwise it will be saved to `<checkpoint_root_dir>/<project>/<name>/log/<actor_name>.log`.
+
+---
+
+## Stages Configuration
+
+For multi-stage training, you can define multiple stages in the `stages` field. Each stage can have its own `algorithm`, `buffer` and other configurations. If a parameter is not specified in a stage, it will inherit the value from the global configuration. Multiple stages will be executed sequentially as defined.
+
+```yaml
+stages:
+  - stage_name: sft_warmup
+    mode: train
+    algorithm:
+      algorithm_type: sft
+    buffer:
+      train_batch_size: 64
+      total_steps: 100
+      trainer_input:
+        experience_buffer:
+          name: sft_buffer
+          path: ${oc.env:TRINITY_DATASET_PATH}
+  - stage_name: rft
+```
+
+- `stage_name`: Name of the stage. It should be unique and will be used as a suffix for the experiment name.
+- `mode`: Running mode of Trinity-RFT for this stage. If not specified, it will inherit from the global `mode`.
+- `algorithm`: Algorithm configuration for this stage. If not specified, it will inherit from the global `algorithm`.
+- `buffer`: Buffer configuration for this stage. If not specified, it will inherit from the global `buffer`.
+- `explorer`: Explorer configuration for this stage. If not specified, it will inherit from the global `explorer`.
+- `trainer`: Trainer configuration for this stage. If not specified, it will inherit from the global `trainer`.
 
 ---
 
@@ -554,14 +611,12 @@ critic:
 trainer:
   balance_batch: True
   # total_training_steps: null
-  # auto: find the last ckpt to resume. If can't find, start from scratch
-  resume_mode: auto # or auto or resume_path if
+  resume_mode: auto
   resume_from_path: ""
   critic_warmup: 0
   default_hdfs_dir: null
   remove_previous_ckpt_in_save: False
   del_local_ckpt_after_load: False
-  val_before_train: False
   max_actor_ckpt_to_keep: 5
   max_critic_ckpt_to_keep: 5
 ```
@@ -595,7 +650,7 @@ trainer:
 - `critic.cliprange_value`: Used for compute value loss.
 
 - `trainer.balance_batch`: Whether to balance batch size between GPUs during training.
-- `trainer.resume_mode`: Resume mode for training. Support `disable`, `auto` and `resume_path`.
+- `trainer.resume_mode`: Resume mode for training. Support `disable`, `auto` and `resume_path`. Default value is `auto`, i.e., finding the last ckpt to resume or training from scratch when it cannot find the ckpt.
 - `trainer.resume_from_path`: Path to resume from.
 - `trainer.critic_warmup`: The number of steps to train the critic model before actual policy learning.
 - `trainer.default_hdfs_dir`: Default HDFS directory for saving checkpoints.

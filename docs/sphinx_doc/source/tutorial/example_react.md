@@ -1,4 +1,3 @@
-
 # Multi-Step ReAct
 
 This example serves as a demonstration for adapting the Trinity-RFT training workflow to your own agentic project, through our OpenAI-compatible `ModelWrapper` class.
@@ -33,13 +32,14 @@ Below we show you how to perform this step-by-step.
 
 ### The Workflow (`workflow.py`)
 
-The core logic is encapsulated in the `AgentScopeReactV2MathWorkflow` class.
+The core logic is encapsulated in the `AgentScopeReactMathWorkflow` class.
 
 1.  **Initialization (`__init__`)**:
-    - It first initializes the AgentScope environment and the desired agent (`ReActAgentV2`).
+    - It first initializes the AgentScope environment and the desired agent (`ReActAgent`).
     - The most critical integration step is injecting Trinity's model client into the AgentScope agent:
       ```python
       self.openai_client = model.get_openai_client()
+      # self.openai_client = get_openai_async_client() # or async client depend on whether you are using async openai client
       # ...
       self.agent.model.client = self.openai_client
       ```
@@ -48,7 +48,7 @@ The core logic is encapsulated in the `AgentScopeReactV2MathWorkflow` class.
 2.  **Execution (`run`)**:
     - The `run` method is remarkably simple. It just passes the task description to the agent.
       ```python
-      content = self.agent.reply(msg).content
+      content = self.agent.reply(msg).content # your agent logic
       ```
     - After the agent completes its multi-step reasoning and produces a final answer, Trinity extracts all the intermediate turns from the model's history:
       ```python
@@ -62,8 +62,8 @@ The configuration file fine-tunes the behavior of the entire system. Here are th
 
 #### Native Tool Calling Settings
 
-These settings in the `explorer.rollout_model` section configure the VLLM-based engine to generate and parse OpenAI-compatible tool calls.
-We use the `Qwen3` model and host model with vllm. The configuration for different model can be found in [VLLM Toolcalls](https://docs.vllm.ai/en/stable/features/tool_calling.html#qwen-models)
+These settings in the `explorer.rollout_model` section configure the vLLM-based engine to generate and parse OpenAI-compatible tool calls.
+We use the `Qwen3` model and host model with vLLM. The configuration for different model can be found in [vLLM Toolcalls](https://docs.vllm.ai/en/stable/features/tool_calling.html#qwen-models)
 
 
 ```yaml
@@ -100,24 +100,24 @@ synchronizer:
 
 ## How to Run the Example
 
-1.  **Prerequisites**: Ensure you have Trinity installed, along with the dependencies for this example (e.g., `agentscope`). Please refer to [Agentscope Github link](https://github.com/agentscope-ai/agentscope/tree/v0).
+1.  **Prerequisites**: Ensure you have Trinity installed, along with the dependencies for this example (e.g., `AgentScope`). Please refer to [Agentscope Github link](https://github.com/agentscope-ai/agentscope/tree/v0).
 
 > **NOTE**: This example requires AgentScope from either:
 >  - Commit: `ad13ed5dacecb79d20abf626769f8c7d7a7d2afb`
 >  - Branch: [`v0`](https://github.com/agentscope-ai/agentscope/tree/v0)
 
-2. Download the model you want to use, and fill in the configuration files in `examples/agentscope_tool_react/agentscope_tool_react_gsm8k.yaml` or `examples/agentscope_tool_react/agentscope_tool_react_dapo.yaml`
+2. Download the model you want to use, and fill in the configuration files in `examples/agentscope_tool_react/agentscopev0_tool_react_gsm8k.yaml` or `examples/agentscope_tool_react/agentscopev0_tool_react_dapo.yaml`
 
 3.  **Launch the training job**: Run the following command from the root directory of the repository.
 
     ```bash
-    trinity run --config examples/agentscope_tool_react/agentscope_tool_react_gsm8k.yaml
+    trinity run --config examples/agentscope_tool_react/agentscopev0_tool_react_gsm8k.yaml
     ```
 
     or
 
     ```bash
-    trinity run --config examples/agentscope_tool_react/agentscope_tool_react_dapo.yaml
+    trinity run --config examples/agentscope_tool_react/agentscopev0_tool_react_dapo.yaml
     ```
 
 
@@ -133,7 +133,9 @@ We can also see that the model generally start to use more tool calls to solve t
 
 ![](../../assets/agentscope_dapo_turns.png)
 
+We can also update the agentscope version to v1, and training on the qwen3-4b-instrcut-2507
 
+![](../../assets/agentscope_dapo_qwen3-4B_reward.png)
 
 ## Summary
 

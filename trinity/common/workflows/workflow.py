@@ -35,8 +35,8 @@ class Task(dict):
     raw_task: Optional[dict] = None  # The raw data sample
 
     # automatically assigned ids
-    batch_id: Union[int, str] = 0
-    task_id: Union[int, str] = 0
+    batch_id: Union[int, str] = ""
+    task_id: Union[int, str] = ""
 
     def to_workflow(
         self, model: Any, auxiliary_models: Optional[List[openai.OpenAI]] = None
@@ -100,8 +100,13 @@ class Workflow(ABC):
 
     @property
     def repeatable(self):
-        """A workflow is repeatable if it can be run multiple times within the run() method."""
+        """A workflow is repeatable if it can be run multiple times within the run() or run_async() method."""
         return True
+
+    @property
+    def asynchronous(self):
+        """Whether the workflow runs in async mode."""
+        return False
 
     @property
     def rollout_args(self):
@@ -122,9 +127,12 @@ class Workflow(ABC):
             "set_repeat_times() must be implemented for a repeatable workflow."
         )
 
-    @abstractmethod
     def run(self) -> List[Experience]:
         """Run workflow and return a list of experiences."""
+        raise NotImplementedError
+
+    async def run_async(self) -> List[Experience]:
+        """Run workflow in async and return a list of experiences."""
         raise NotImplementedError
 
 
@@ -162,8 +170,6 @@ class MultiTurnWorkflow(Workflow):
         assert converted_experience.action_mask is not None
         generation_mask = converted_experience.action_mask
         log_probs = log_probs * generation_mask
-
-        assert tokens.shape == log_probs.shape
 
         metrics = {}
         for k, v in info.items():
@@ -259,6 +265,37 @@ class SimpleWorkflow(Workflow):
         return responses
 
 
+@WORKFLOWS.register_module("async_simple_workflow")
+class AsyncSimpleWorkflow(Workflow):
+    @property
+    def asynchronous(self):
+        return True
+
+    async def run_async(self) -> List[Experience]:
+        # TODO: Optimize the generate function
+        messages = self.format_messages()
+
+        self.logger.debug("start chat")
+        responses = await self.model.chat_async(messages, **self.rollout_args)
+        for i, response in enumerate(responses):
+            reward_dict = self.reward_fn(  # type: ignore [misc]
+                response=response.response_text,  # type: ignore [arg-type]
+                truth=self.truth,
+            )
+
+            if response.metrics is None:
+                response.metrics = {}
+            response.metrics.update(reward_dict)
+            reward = sum(reward_dict.values())
+            response.reward = reward
+            response.eid.run = i + self.run_id_base
+
+            self.logger.debug(
+                f"self.task_desc: {self.task_desc}, messages: {messages}, response: {response.response_text}, reward: {reward}"
+            )
+        return responses
+
+
 @WORKFLOWS.register_module("math_workflow")
 class MathWorkflow(SimpleWorkflow):
     """A workflow for math tasks as introduced in DeepSeek-R1."""
@@ -287,3 +324,8 @@ class MathWorkflow(SimpleWorkflow):
 """
         # call the SimpleWorkflow.reset
         super().reset(task)
+
+
+@WORKFLOWS.register_module("async_math_workflow")
+class AsyncMathWorkflow(AsyncSimpleWorkflow, MathWorkflow):
+    pass

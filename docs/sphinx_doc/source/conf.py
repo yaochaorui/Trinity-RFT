@@ -11,6 +11,8 @@ project = "Trinity-RFT"
 copyright = "2025, Trinity-RFT Team"
 author = "Trinity-RFT Team"
 release = version
+language = "en"
+root_doc = "index"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -41,7 +43,7 @@ napoleon_google_docstring = True
 
 autodoc_member_order = "bysource"
 
-templates_path = ["_templates"]
+templates_path = ["../_templates"]
 exclude_patterns = ["build"]
 
 autodoc_default_options = {
@@ -65,16 +67,25 @@ smv_prefer_remote_refs = False
 
 # -- Options for HTML output -------------------------------------------------
 
-html_theme = "sphinx_rtd_theme"
+html_theme = "sphinx_book_theme"
+
+html_logo = "../_static/logo.svg"
 
 html_theme_options = {
     "navigation_depth": 3,
+    "article_header_end": "article_header_customized.html",
+    "use_download_button": True,
+    "use_fullscreen_button": True,
 }
 
 html_sidebars = {
     "**": [
+        "navbar-logo.html",
+        "icon-links.html",
         "versions.html",
-    ],
+        "search-button-field.html",
+        "sbt-sidebar-nav.html",
+    ]
 }
 
 html_context = {
@@ -88,4 +99,4 @@ html_context = {
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ["_static"]
+html_static_path = ["../_static"]

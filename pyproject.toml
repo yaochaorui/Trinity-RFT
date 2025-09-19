@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name =  "trinity-rft"
-version = "0.3.0.dev0"
+version = "0.3.1.dev0"
 authors = [
     {name="Trinity-RFT Team", email="trinity-rft@outlook.com"},
 ]
@@ -19,11 +19,11 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12"
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.13"
 dependencies = [
     "verl==0.5.0",
-    "ray[default]>=2.45.0",
-    "vllm>=0.9.1,<=0.10.0",
+    "ray[default]>=2.48.0",
+    "vllm>=0.9.1,<=0.10.2",
     "tensordict",
     "wandb",
     "omegaconf",
@@ -31,7 +31,7 @@ dependencies = [
     "psycopg2-binary",
     "networkx",
     "latex2sympy2_extended",
-    "math_verify",
+    "math_verify>=0.8.0",
     "ninja",
     "fire",
     "streamlit",
@@ -42,7 +42,7 @@ dependencies = [
     "jsonlines",
     "sortedcontainers",
     "word2number",
-    "transformers<4.54.0",  # TODO: remove when https://github.com/vllm-project/vllm-ascend/issues/2046 is fixed
+    "transformers",
 ]
 
 [project.scripts]
@@ -50,13 +50,13 @@ trinity = "trinity.cli.launcher:main"
 
 [project.optional-dependencies]
 data = [
-    "py-data-juicer"
+    "py-data-juicer>=1.4.3"
 ]
 agent = [
     "agentscope"
 ]
 rm_gallery = [
-    "rm-gallery>=0.1.1"
+    "rm-gallery>=0.1.5"
 ]
 dev = [
     "pre-commit>=2.17.0",
@@ -70,18 +70,23 @@ dev = [
     "parameterized",
     "matplotlib",
 ]
+megatron = [
+    "megatron-core[mlm]==0.13.1",
+    "transformer_engine[pytorch]==2.6.0.post1",
+    "mbridge>=0.13.0",
+]
 
 doc = [
     "sphinx",
     "sphinx-autobuild",
-    "sphinx_rtd_theme",
+    "sphinx-book-theme",
     "myst-parser",
     "sphinxcontrib-apidoc",
     "sphinx-multiversion",
 ]
 
 flash_attn = [
-    "flash-attn==2.8.0.post2"
+    "flash-attn==2.8.1"
 ]
 
 [tool.setuptools.packages.find]
