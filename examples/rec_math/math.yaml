@@ -1,23 +1,20 @@
-# Configuration file for the REC GSM8k project.
-
-project: "Trinity-RFT-GSM8K"
-name: rec_gsm8k
-checkpoint_root_dir:  /PATH/TO/CHECKPOINT/
+project: Trinity-RFT-rec_math
+name: rec_math
+checkpoint_root_dir: /PATH/TO/SAVE/CHECKPOINTS/
 mode: both
 model:
   model_path: /PATH/TO/MODEL/
-  max_response_tokens: 1024
-  max_model_len: 1280
+  max_response_tokens: 2048
+  max_model_len: 2048
 algorithm:
   algorithm_type: rec
   policy_loss_fn_args:
     epsilon_low: 0.2
     epsilon_high: 0.2
-    clip_mode: "none"
-    weight: "none"
-    temp: 1.0
-    regularizer: "none"
-    regularizer_coef: 0.0
+    epsilon_high_prime: 0.4
+    epsilon_low_prime: 0.4
+    clip_mode: none
+    weight: none
   advantage_fn_args:
     std_normalize: false
   repeat_times: 8
@@ -25,34 +22,39 @@ cluster:
   node_num: 1
   gpu_per_node: 8
 buffer:
-  total_steps: 100
-  batch_size: 96
+  total_steps: 200
+  batch_size: 16
   explorer_input:
     taskset:
-      name: gsm8k
+      name: math
       storage_type: file
-      path: /PATH/TO/DATASET/
-      split: train
+      path: /PATH/TO/DATA/
       format:
-        prompt_key: question
-        response_key: answer
+        prompt_key: problem
+        response_key: solution
       rollout_args:
         temperature: 1.0
+        top_p: 1.0
+        logprobs: 0
     eval_tasksets:
-      - name: gsm8k-eval
+      - name: math
         storage_type: file
-        path: /PATH/TO/DATASET/
+        path: /PATH/TO/DATA/
         split: test
         format:
-          prompt_key: question
-          response_key: answer
-    default_workflow_type: math_workflow
+          prompt_key: problem
+          response_key: solution
+        rollout_args:
+          temperature: 0.1
+          top_p: 0.95
+    default_workflow_type: math_boxed_workflow
+    default_reward_fn_type: math_boxed_reward
   trainer_input:
     experience_buffer:
-      name: gsm8k_buffer
+      name: math_buffer
       storage_type: queue
 explorer:
-  eval_interval: 20
+  eval_interval: 500
   runner_num: 64
   rollout_model:
     engine_type: vllm_async
@@ -61,11 +63,13 @@ explorer:
     enable_prefix_caching: false
     enforce_eager: true
     dtype: bfloat16
+    max_prompt_tokens: 1024
+    max_response_tokens: 2048
     seed: 42
 synchronizer:
   sync_method: nccl
-  sync_interval: 20
-  sync_timeout: 1200
+  sync_interval: 1
+  sync_timeout: 3600
   sync_offset: 0
 trainer:
   trainer_type: verl
@@ -79,7 +83,7 @@ trainer:
         ppo_max_token_len_per_gpu: 16384
         ulysses_sequence_parallel_size: 1
         optim:
-          lr: 1e-6
+          lr: 6e-8
       ref:
         log_prob_use_dynamic_bsz: ${trainer.trainer_config.actor_rollout_ref.actor.use_dynamic_bsz}
         log_prob_max_token_len_per_gpu: ${trainer.trainer_config.actor_rollout_ref.actor.ppo_max_token_len_per_gpu}

@@ -49,8 +49,7 @@ class RECPolicyLossFn(PolicyLossFn):
         assert self.weight in [
             "none",
             "importance_sampling",
-            "advantage_unnormalized",
-            "confidence",
+            "advantage",
         ], f"Invalid weight: {self.weight}"
 
         self.regularizer = regularizer
@@ -95,11 +94,7 @@ class RECPolicyLossFn(PolicyLossFn):
 
         if self.weight == "importance_sampling":
             advantages = advantages * ratio  # importance sampling
-        elif self.weight == "confidence":
-            advantages = (
-                advantages * torch.exp(self.temp * logprob).detach()
-            )  # confidence weighting
-        elif self.weight == "advantage_unnormalized":
+        elif self.weight == "advantage":
             weight = torch.exp(advantages / self.temp)
             advantages = advantages * weight  # advantage weighting  (unnormalized version)
 
