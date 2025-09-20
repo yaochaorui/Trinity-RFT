@@ -36,18 +36,14 @@ class RECPolicyLossFn(PolicyLossFn):
             0.0 < self.epsilon_low_prime <= 1.0
         ), f"Invalid epsilon_low_prime: {self.epsilon_low_prime}"
         assert (
-            0.0 < self.epsilon_high_prime <= 1.0
+            0.0 < self.epsilon_high_prime
         ), f"Invalid epsilon_high_prime: {self.epsilon_high_prime}"
         self.clip_mode = clip_mode
         assert self.clip_mode in [
             "none",
             "one-side",
             "two-side",
-            "one-side-positive",
-            "one-side-negative",
             "ring",
-            "two-side-negative",
-            "two-side-negative-2",
         ], f"Invalid clip_mode: {self.clip_mode}"
         self.weight = weight
         assert self.weight in [
@@ -57,7 +53,7 @@ class RECPolicyLossFn(PolicyLossFn):
             "confidence",
         ], f"Invalid weight: {self.weight}"
 
-        self.regularizer = "none"
+        self.regularizer = regularizer
         assert self.regularizer in [
             "none",
             "k2",
@@ -84,32 +80,14 @@ class RECPolicyLossFn(PolicyLossFn):
         if self.clip_mode == "two-side":
             is_in_range = (ratio >= (1 - self.epsilon_low)) * (ratio <= (1 + self.epsilon_high))
         elif self.clip_mode == "one-side":
-            is_in_range = (ratio <= (1 + self.epsilon_high)) * (advantages > 0) + (
-                advantages < 0
-            ) * (ratio >= (1 - self.epsilon_low))
-        elif self.clip_mode == "one-side-positive":
-            is_in_range = (ratio <= (1 + self.epsilon_high)) * (advantages > 0) + (
+            is_in_range = (ratio <= (1 + self.epsilon_high)) * (advantages >= 0) + (
                 advantages <= 0
-            ) * torch.ones_like(ratio).bool()
-        elif self.clip_mode == "one-side-negative":
-            is_in_range = (ratio >= (1 - self.epsilon_low)) * (advantages < 0) + (
-                advantages >= 0
-            ) * torch.ones_like(ratio).bool()
-        elif self.clip_mode == "two-side-negative":
-            is_in_range = (ratio >= (1 - self.epsilon_low)) * (ratio <= (1 + self.epsilon_high)) + (
-                advantages < 0
-            ) * (ratio >= (1 - self.epsilon_low_prime))
-        elif self.clip_mode == "two-side-negative-2":
-            is_in_range = (
-                (ratio >= (1 - self.epsilon_low)) * (ratio <= (1 + self.epsilon_high))
-                + (advantages < 0) * (ratio >= (1 - self.epsilon_low_prime))
-                + (advantages >= 0) * torch.ones_like(ratio).bool()
-            )
+            ) * (ratio >= (1 - self.epsilon_low))
         elif self.clip_mode == "ring":
             is_in_range = (
                 (ratio >= (1 - self.epsilon_low)) * (ratio <= (1 + self.epsilon_high))
-                + (ratio <= (1 + self.epsilon_high_prime)) * (advantages > 0)
-                + (advantages < 0) * (ratio >= (1 - self.epsilon_low_prime))
+                + (advantages >= 0) * (ratio <= 1 - self.epsilon_low_prime)
+                + (advantages <= 0) * (ratio >= 1 + self.epsilon_high_prime)
             )
         else:  # none
             is_in_range = torch.ones_like(ratio).bool()
@@ -129,11 +107,11 @@ class RECPolicyLossFn(PolicyLossFn):
 
         if self.regularizer == "forward-kl":
             regularizer_losses = self.regularizer_coef * logprob
-            pg_losses -= regularizer_losses
-        if self.regularizer == "k2":
+            pg_losses = pg_losses - regularizer_losses
+        elif self.regularizer == "k2":
             # note that here we absorb the 1/2 in Kimi into \tau
             regularizer_losses = self.regularizer_coef * (logprob - old_logprob).square()
-            pg_losses += regularizer_losses
+            pg_losses = pg_losses + regularizer_losses
 
         pg_loss = masked_mean(pg_losses, action_mask)
 
@@ -149,8 +127,8 @@ class RECPolicyLossFn(PolicyLossFn):
         return {
             "epsilon_low": 0.2,
             "epsilon_high": 0.2,
-            "epsilon_low_prime": 0.4,
-            "epsilon_high_prime": 0.4,
+            "epsilon_low_prime": 0.6,
+            "epsilon_high_prime": 2,
             "clip_mode": "none",
             "weight": "none",
             "regularizer": "none",
