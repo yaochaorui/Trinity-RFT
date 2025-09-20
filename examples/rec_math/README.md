@@ -1,10 +1,10 @@
-# Example: REC on GSM8k dataset
+# Example: REC on MATH dataset
 
-This example shows the usage of REC on the [GSM8k dataset](https://huggingface.co/datasets/openai/gsm8k).
+This example shows the usage of REC on the [MATH dataset](https://huggingface.co/datasets/nlile/hendrycks-MATH-benchmark).
 
 For more detailed information, please refer to the [documentation](../../docs/sphinx_doc/source/tutorial/example_reasoning_basic.md).
 
-The config files are located in [`gsm8k.yaml`](gsm8k.yaml) and [`train_gsm8k.yaml`](train_gsm8k.yaml).
+The config files are located in [`math.yaml`](math.yaml) and [`train_math.yaml`](train_math.yaml).
 
 # Group-relative REINFORCE Families
 This folder provides **example configurations** for running different group-relative REINFORCE families within Trinity-RFT.
