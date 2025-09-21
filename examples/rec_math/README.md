@@ -4,7 +4,7 @@ This example shows the usage of REC on the [MATH dataset](https://huggingface.co
 
 For more detailed information, please refer to the [documentation](../../docs/sphinx_doc/source/tutorial/example_reasoning_basic.md).
 
-The config files are located in [`math.yaml`](math.yaml).
+The config file is located in [`math.yaml`](math.yaml).
 
 # Group-relative REINFORCE Families
 This folder provides **example configurations** for running different group-relative REINFORCE families within Trinity-RFT.
