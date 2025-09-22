@@ -128,4 +128,5 @@ class RECPolicyLossFn(PolicyLossFn):
             "weight": "none",
             "regularizer": "none",
             "regularizer_coef": 0.0,
+            "temp": 1.0,
         }
