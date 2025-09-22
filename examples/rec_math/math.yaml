@@ -1,9 +1,9 @@
 project: Trinity-RFT-rec_math
 name: rec_math
-checkpoint_root_dir: /PATH/TO/SAVE/CHECKPOINTS/
+checkpoint_root_dir: ${oc.env:TRINITY_CHECKPOINT_ROOT_DIR,./checkpoints}
 mode: both
 model:
-  model_path: /PATH/TO/MODEL/
+  model_path: ${oc.env:TRINITY_MODEL_PATH,Qwen/Qwen2.5-3B-Instruct}
   max_response_tokens: 2048
   max_model_len: 2048
 algorithm:
@@ -28,7 +28,7 @@ buffer:
     taskset:
       name: math
       storage_type: file
-      path: /PATH/TO/DATA/
+      path: ${oc.env:TRINITY_TASKSET_PATH}
       format:
         prompt_key: problem
         response_key: solution
@@ -39,7 +39,7 @@ buffer:
     eval_tasksets:
       - name: math
         storage_type: file
-        path: /PATH/TO/DATA/
+        path: ${oc.env:TRINITY_EVAL_TASKSET_PATH}
         split: test
         format:
           prompt_key: problem

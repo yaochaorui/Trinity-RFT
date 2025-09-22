@@ -202,7 +202,7 @@ algorithm:
     regularizer: "none"
   advantage_fn_args:
     std_normalize: false
-    drop: balance
+    drop: "balance"
 ```
 
 
