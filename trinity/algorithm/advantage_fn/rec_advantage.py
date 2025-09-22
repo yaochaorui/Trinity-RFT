@@ -1,96 +1,12 @@
 """REC advantage computation
 """
 
-from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
 import torch
-from verl import DataProto
 
-from trinity.algorithm.advantage_fn.advantage_fn import (
-    ADVANTAGE_FN,
-    AdvantageFn,
-    GroupAdvantage,
-)
+from trinity.algorithm.advantage_fn.advantage_fn import ADVANTAGE_FN, GroupAdvantage
 from trinity.common.experience import Experience, group_by
-from trinity.utils.annotations import Deprecated
-
-
-@Deprecated
-@ADVANTAGE_FN.register_module("rec_verl")
-class RECAdvantageFn(AdvantageFn):
-    """REC advantage computation"""
-
-    def __init__(
-        self,
-        epsilon: float = 1e-6,
-        std_normalize: Optional[bool] = False,
-    ) -> None:
-        self.epsilon = epsilon
-        self.std_normalize = std_normalize
-
-    def __call__(
-        self,
-        exps: DataProto,
-        **kwargs,
-    ) -> Tuple[DataProto, Dict]:
-        """
-        Compute advantage for REC, operating only on Outcome reward
-        (with only one scalar reward for each response).
-
-            token_level_rewards: `(torch.Tensor)`
-                shape: (bs, response_length)
-            eos_mask: `(torch.Tensor)`
-                shape: (bs, response_length)
-            scores: `(torch.Tensor)`
-                shape: (bs, response_length)
-        """
-        token_level_rewards = exps.batch["token_level_rewards"]
-        eos_mask = exps.batch["response_mask"]
-        index = exps.non_tensor_batch["uid"]
-        epsilon = self.epsilon
-
-        response_length = token_level_rewards.shape[-1]
-        scores = token_level_rewards.sum(dim=-1)
-
-        id2score = defaultdict(list)
-        id2mean = {}
-        id2std = {}
-
-        with torch.no_grad():
-            bsz = scores.shape[0]
-            for i in range(bsz):
-                id2score[index[i]].append(scores[i])
-            for idx in id2score:
-                if len(id2score[idx]) == 1:
-                    id2mean[idx] = torch.tensor(0.0)
-                    id2std[idx] = torch.tensor(1.0)
-                elif len(id2score[idx]) > 1:
-                    id2mean[idx] = torch.mean(torch.tensor(id2score[idx], dtype=torch.float32))
-                    id2std[idx] = torch.std(torch.tensor(id2score[idx], dtype=torch.float32))
-                else:
-                    raise ValueError(f"no score in prompt index: {idx}")
-            for i in range(bsz):
-                if self.std_normalize:
-                    scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
-                else:
-                    scores[i] = scores[i] - id2mean[index[i]]
-            scores = scores.unsqueeze(-1).tile([1, response_length]) * eos_mask
-
-        exps.batch["advantages"] = scores
-        exps.batch["returns"] = scores
-
-        metrics = {
-            # TODO: add meaningful metrics
-        }
-
-        return exps, metrics
-
-    @classmethod
-    def default_args(cls) -> Dict:
-        return {
-            "epsilon": 1e-6,
-        }
 
 
 @ADVANTAGE_FN.register_module("rec")
@@ -101,19 +17,19 @@ class RECGroupedAdvantage(GroupAdvantage):
         self,
         epsilon: float = 1e-6,
         std_normalize: Optional[bool] = False,
-        drop: Optional[str] = "none",
+        drop: Optional[str] = None,
     ) -> None:
         """Initialize the REC advantage function.
 
         Args:
             epsilon (float): A small value to avoid division by zero.
             std_normalize (Optional[bool]): If provided, normalize the advantage with group-level reward standard deviation.
-            drop (Optional[str]): Strategy to drop experiences. Options are "none" or "balance".
+            drop (Optional[str]): Strategy to drop experiences. Options are "balance" or None.
         """
         self.epsilon = epsilon
         self.std_normalize = std_normalize
         self.drop = drop
-        assert self.drop in ["none", "balance"], f"Invalid drop: {self.drop}"
+        assert self.drop in [None, "balance"], f"Invalid drop: {self.drop}"
 
     def group_experiences(self, exps):
         return group_by(exps, id_type="task")
@@ -180,5 +96,5 @@ class RECGroupedAdvantage(GroupAdvantage):
         return {
             "epsilon": 1e-6,
             "std_normalize": False,
-            "drop": "none",
+            "drop": None,
         }
