@@ -1,5 +1,4 @@
 # Configuration file for the REC GSM8k project.
-
 project: "Trinity-RFT-GSM8K"
 name: rec_gsm8k
 checkpoint_root_dir: ${oc.env:TRINITY_CHECKPOINT_ROOT_DIR,./checkpoints}
